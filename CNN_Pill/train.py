@@ -4,6 +4,10 @@ Uses random 80/20 split on all data (recommended for ePillID dataset)
 """
 
 import os
+# Disable TensorFlow warnings
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 import sys
 import time
 import yaml
