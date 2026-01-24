@@ -1,0 +1,59 @@
+# Checkpoints and model weights
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# TensorBoard logs
+logs/
+runs/
+events.out.tfevents.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data (don't commit large datasets)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config
+config_local.yaml
