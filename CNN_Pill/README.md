@@ -13,6 +13,8 @@ Phân loại viên thuốc từ hình ảnh sử dụng EfficientNetV2-S với T
 - Tra cứu thông tin thuốc qua NDC Code trên NIH Drug Database
 - Hỗ trợ batch inference cho nhiều hình ảnh
 - Visualization kết quả dự đoán
+- **Resume training từ checkpoint** - Tiếp tục huấn luyện khi bị gián đoạn
+- **TensorFlow warning suppression** - Tắt thông báo không cần thiết
 
 ### Cấu trúc dự án
 
@@ -26,26 +28,33 @@ CNN_Pill/
 │   └── dataset.py                       # Dataset class và DataLoader
 ├── data/                                # Dữ liệu dataset
 │   ├── all_labels.csv                   # Metadata toàn bộ dataset
-│   ├── classification_data/
-│   │   └── fcn_mix_weight/dc_224/      # Hình ảnh (224x224)
-│   └── folds/
-│       └── pilltypeid_nih_sidelbls0.01_metric_5folds/
-│           ├── label_encoder.pickle     # Label encoder
-│           └── base/                    # 5-fold cross-validation files
-│               ├── pilltypeid_..._0.csv
-│               ├── pilltypeid_..._1.csv
-│               └── ...
+│   └── ePillID_data/                    # Đường dẫn dữ liệu đúng
+│       └── classification_data/
+│           └── fcn_mix_weight/dc_224/  # Hình ảnh (224x224)
+├── data/folds/                          # Fold cross-validation
+│   └── pilltypeid_nih_sidelbls0.01_metric_5folds/
+│       ├── label_encoder.pickle         # Label encoder
+│       └── base/                        # 5-fold cross-validation files
+│           ├── pilltypeid_..._0.csv
+│           ├── pilltypeid_..._1.csv
+│           └── ...
 ├── checkpoints/                         # Checkpoint saved models
-│   └── best_fold0.pth                   # Best model checkpoint
+│   └── run_YYYYMMDD_HHMMSS/            # Run directory với timestamp
+│       ├── best_fold0.pth               # Best model checkpoint
+│       ├── checkpoint_fold0_epochX.pth  # Periodic checkpoints
+│       ├── config.yaml                 # Saved config
+│       └── logs/                       # TensorBoard logs
 ├── templates/                           # HTML templates cho web app
 │   └── index.html                       # Web UI
 ├── uploads/                             # Thư mục upload ảnh (tự tạo)
+├── .gitignore                           # Git ignore file
 ├── app.py                               # Flask Web Application
-├── train.py                             # Script huấn luyện
+├── train.py                             # Script huấn luyện (với resume)
 ├── inference.py                         # Script inference
 ├── config.yaml                          # File cấu hình
 ├── requirements.txt                     # Dependencies
-└── README.md                            # File hướng dẫn này
+├── README.md                            # File hướng dẫn này
+└── THEORY.md                            # Tài liệu lý thuyết chi tiết
 ```
 
 ---
@@ -57,6 +66,7 @@ CNN_Pill/
 - **Số lượng ảnh:** ~3,728 hình ảnh
 - **Kích thước ảnh:** 224 x 224 pixels
 - **Chia dữ liệu:** 80% train / 20% validation (random split)
+- **Đường dẫn ảnh:** `ePillID_data/classification_data/fcn_mix_weight/dc_224/`
 
 ### NDC Code Format
 
@@ -149,10 +159,34 @@ python train.py
 python train.py --config my_config.yaml
 ```
 
+#### Resume training từ checkpoint (TÍNH NĂNG MỚI)
+
+Khi training bị gián đoạn (mất điện, crash, etc.), bạn có thể tiếp tục từ checkpoint đã lưu:
+
+```bash
+# Resume từ best model
+python train.py --resume checkpoints/run_20260125_065908/best_fold0.pth
+
+# Resume từ checkpoint epoch cụ thể
+python train.py --resume checkpoints/run_20260125_065908/checkpoint_fold0_epoch15.pth
+```
+
+**Chức năng resume sẽ:**
+- Khôi phục model weights
+- Khôi phục optimizer state
+- Tiếp tục training từ epoch tiếp theo
+- Giữ nguyên best accuracy đã đạt được
+
 #### Các tham số command line
 
 ```bash
-python train.py --config config.yaml --fold 0 --resume checkpoints/best_fold0.pth
+python train.py [OPTIONS]
+
+Options:
+  --config PATH    Path to config file (default: config.yaml)
+  --data_dir PATH  Path to dataset directory (default: data)
+  --save_dir PATH  Path to save checkpoints (default: checkpoints)
+  --resume PATH    Path to checkpoint to resume from (optional)
 ```
 
 ---
@@ -168,7 +202,7 @@ model:
   freeze_backbone: true
 
 data:
-  data_dir: "../ePillID_data"
+  data_dir: "data"
   batch_size: 32
   num_workers: 0           # Set = 0 cho Windows
   augmentation: true
@@ -288,6 +322,40 @@ Mở trình duyệt tại: http://localhost:6006
 
 ---
 
+## Quản lý checkpoints
+
+### Cấu trúc checkpoint directory
+
+Mỗi lần chạy training sẽ tạo một thư mục mới với timestamp:
+
+```
+checkpoints/
+└── run_20260125_065908/
+    ├── best_fold0.pth              # Best model (highest val acc)
+    ├── checkpoint_fold0_epoch10.pth # Checkpoint mỗi 10 epoch
+    ├── checkpoint_fold0_epoch20.pth
+    ├── config.yaml                 # Config được sử dụng
+    └── logs/
+        └── train/                  # TensorBoard logs
+```
+
+### Xóa checkpoints cũ
+
+```bash
+# Xóa tất cả checkpoints
+rm -rf checkpoints/*
+
+# Xóa run cụ thể
+rm -rf checkpoints/run_20260124_163841
+```
+
+**Lưu ý:** File `.gitignore` đã được cấu hình để không commit:
+- `checkpoints/` - Model files (rất nặng)
+- `logs/` - TensorBoard logs
+- `data/` - Dataset
+
+---
+
 ## Kết quả huấn luyện
 
 ### Model: EfficientNetV2-S
@@ -295,7 +363,7 @@ Mở trình duyệt tại: http://localhost:6006
 | Metric        | Giá trị  |
 |---------------|----------|
 | Top-1 Acc     | ~23.46%  |
-| Top-5 Acc     | ~45%     |
+| Top-5 Acc     | ~43%     |
 | Num Classes   | 960      |
 | Train Samples | ~2,982   |
 | Val Samples   | ~746     |
@@ -323,10 +391,18 @@ data:
 ```
 
 **3. FileNotFoundError: Image not found**
-- Kiểm tra đường dẫn `data_dir` trong config.yaml
+- Kiểm tra đường dẫn dữ liệu: `ePillID_data/classification_data/fcn_mix_weight/dc_224/`
 - Đảm bảo dataset đã được giải nén đúng vị trí
 
-**4. Web app không mở được NIH Drug Portal**
+**4. TensorFlow warnings khi training**
+- Đã tự động tắt trong train.py
+- Nếu vẫn thấy, set environment variable:
+  ```bash
+  export TF_ENABLE_ONEDNN_OPTS=0
+  export TF_CPP_MIN_LOG_LEVEL=3
+  ```
+
+**5. Web app không mở được NIH Drug Portal**
 - Kiểm tra kết nối internet
 - Tắt popup blocker trong trình duyệt
 
@@ -336,6 +412,41 @@ data:
 - Batch size lớn hơn → training ổn định hơn nhưng cần nhiều VRAM
 - Label smoothing giúp tránh overconfidence
 - Class weights giúp cân bằng dataset imbalance
+- Sử dụng `--resume` để tiếp tục training khi bị gián đoạn
+
+---
+
+## Các tính năng kỹ thuật
+
+### Resume Training Implementation
+
+```python
+# Sử dụng trong train.py
+python train.py --resume checkpoints/run_xxx/best_fold0.pth
+
+# Code tự động:
+# 1. Load model state dict
+# 2. Load optimizer state dict
+# 3. Khôi phục epoch, best_acc1, best_acc5
+# 4. Tiếp tục training từ epoch + 1
+```
+
+### TensorFlow Warning Suppression
+
+```python
+# Đã thêm vào train.py
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+```
+
+### Git Ignore Setup
+
+File `.gitignore` đã được cấu hình để bỏ qua:
+- Checkpoints (`.pth` files)
+- TensorBoard logs
+- Dữ liệu (`data/`)
+- Python cache (`__pycache__/`)
 
 ---
 

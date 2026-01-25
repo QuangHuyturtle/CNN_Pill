@@ -11,6 +11,7 @@
 7. [Data Augmentation](#7-data-augmentation)
 8. [Loss Function & Optimization](#8-loss-function--optimization)
 9. [Evaluation Metrics](#9-evaluation-metrics)
+10. [Resume Training & Checkpoint Management](#10-resume-training--checkpoint-management)
 
 ---
 
@@ -246,7 +247,7 @@ Head: LR = 0.001 (fast update)
 
 **Phase 2 (Epoch 10+):**
 - Unfreeze toàn bộ
-- Backone LR × 0.1
+- Backbone LR × 0.1
 - Mục đích: Fine-tune features cho bài toán thuốc
 
 ---
@@ -264,7 +265,7 @@ Format: XXXXX-XXXX-XX_HASH
 
 Labeler  | Product | Package
 (5 digits)| (4 digits)| (2 digits)
- 00591  -  5307  -   01    _   BE305F72
+  00591  -  5307  -   01    _   BE305F72
 ```
 
 **Các thành phần:**
@@ -372,6 +373,26 @@ Optimizer Update:
     weights = weights - lr × gradient
     ↓
 New Weights
+```
+
+### 6.4 Đường dẫn dữ liệu
+
+**Đường dẫn ảnh trong dataset:**
+```
+data/ePillID_data/classification_data/fcn_mix_weight/dc_224/
+├── 0.jpg
+├── 1.jpg
+├── 2.jpg
+└── ...
+```
+
+**Đường dẫn CSV folds:**
+```
+data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/
+├── pilltypeid_..._0.csv
+├── pilltypeid_..._1.csv
+├── ...
+└── label_encoder.pickle
 ```
 
 ---
@@ -589,7 +610,7 @@ F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
 | Metric | Giá trị |
 |--------|---------|
 | Top-1 Accuracy | ~23.46% |
-| Top-5 Accuracy | ~45% |
+| Top-5 Accuracy | ~43% |
 | Num Classes | 960 |
 | Samples/Class | ~3.9 |
 
@@ -600,6 +621,159 @@ F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
 
 ---
 
+## 10. Resume Training & Checkpoint Management
+
+### 10.1 Checkpoint là gì?
+
+**Checkpoint** là snapshot trạng thái của mô hình tại một thời điểm training, bao gồm:
+- **Model state dict:** Weights của tất cả layers
+- **Optimizer state dict:** Trạng thái optimizer (momentum, etc.)
+- **Epoch:** Epoch hiện tại
+- **Best metrics:** accuracy tốt nhất đạt được
+- **Config:** Cấu hình training đã dùng
+
+### 10.2 Cấu trúc checkpoint file
+
+```python
+checkpoint = {
+    'epoch': epoch,                              # Epoch hiện tại
+    'model_state_dict': model.state_dict(),      # Model weights
+    'optimizer_state_dict': optimizer.state_dict(),  # Optimizer state
+    'best_acc1': best_acc1,                      # Best Top-1 accuracy
+    'best_acc5': best_acc5,                      # Best Top-5 accuracy
+    'fold_idx': fold_idx,                        # Fold index
+    'num_classes': num_classes                   # Số classes
+}
+```
+
+### 10.3 Tại sao cần Resume Training?
+
+**Các tình huống cần resume:**
+1. **Mất điện / System crash:** Training bị gián đoạn giữa chừng
+2. **Out of memory:** GPU không đủ memory
+3. **Manual stop:** Cần dừng training để kiểm tra
+4. **Hyperparameter tuning:** Thay đổi LR và train tiếp
+5. **Long training:** Training nhiều ngày, cần checkpoint định kỳ
+
+### 10.4 Cách Resume Training hoạt động
+
+```
+Training Process:
+┌─────────────────────────────────────────────┐
+│ Epoch 0-15: Training                        │
+│     ↓                                        │
+│  Crash / Stop                                │
+│     ↓                                        │
+│  Save checkpoint at epoch 15                 │
+│     ↓                                        │
+│  Resume from checkpoint                      │
+│     ↓                                        │
+│  Load: model weights, optimizer state        │
+│     ↓                                        │
+│  Continue from epoch 16                      │
+│     ↓                                        │
+│  Train to completion                         │
+└─────────────────────────────────────────────┘
+```
+
+### 10.5 Implementation Details
+
+**Bước 1: Lưu checkpoint**
+```python
+# Lưu best model
+if val_acc1 > self.best_acc1:
+    self.best_acc1 = val_acc1
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': self.model.state_dict(),
+        'optimizer_state_dict': self.optimizer.state_dict(),
+        'best_acc1': self.best_acc1,
+        'best_acc5': self.best_acc5,
+    }
+    torch.save(checkpoint, 'best_model.pth')
+```
+
+**Bước 2: Load checkpoint & Resume**
+```python
+# Load checkpoint
+checkpoint = torch.load('best_model.pth', map_location=device)
+
+# Restore model
+model.load_state_dict(checkpoint['model_state_dict'])
+
+# Restore optimizer
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+# Get start epoch
+start_epoch = checkpoint['epoch'] + 1
+
+# Continue training
+for epoch in range(start_epoch, num_epochs):
+    train_one_epoch(epoch)
+```
+
+### 10.6 TensorBoard Logging
+
+**TensorBoard** là công cụ visualize training progress:
+
+**Metrics được log:**
+- **Loss:** Train và validation loss mỗi epoch
+- **Accuracy:** Top-1 và Top-5 accuracy
+- **Learning Rate:** LR hiện tại
+- **Gradients:** Gradient norms (cho debugging)
+
+**Cách sử dụng:**
+```bash
+# Start TensorBoard
+tensorboard --logdir checkpoints/run_XXX/logs
+
+# Mở browser
+http://localhost:6006
+```
+
+**Các graph hiển thị:**
+1. **Scalars:** Loss, Accuracy, LR qua thời gian
+2. **Histograms:** Weight distribution
+3. **Graphs:** Model architecture
+
+### 10.7 Quản lý checkpoints
+
+**Cấu trúc directory:**
+```
+checkpoints/
+└── run_20260125_065908/
+    ├── best_fold0.pth              # Best model
+    ├── checkpoint_fold0_epoch10.pth # Checkpoint epoch 10
+    ├── checkpoint_fold0_epoch20.pth # Checkpoint epoch 20
+    ├── config.yaml                 # Config đã dùng
+    └── logs/
+        └── train/
+            └── events.out.tfevents...
+```
+
+**Best practices:**
+1. **Lưu checkpoint định kỳ:** Mỗi 10 epoch
+2. **Lưu best model:** Khi val accuracy cải thiện
+3. **Dọn dẹp cũ:** Xóa checkpoints cũ để tiết kiệm disk
+4. **Backup quan trọng:** Copy best model đến location khác
+
+### 10.8 TensorFlow Warning Suppression
+
+**Vấn đề:** TensorFlow warnings hiển thị khi training PyTorch model
+
+**Giải pháp:** Set environment variables trong `train.py`:
+```python
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+```
+
+**Các warnings bị tắt:**
+- oneDNN custom operations warning
+- TensorFlow info messages
+
+---
+
 ## Tài liệu tham khảo
 
 1. **EfficientNetV2:** Tan & Le, "EfficientNetV2: Smaller Models and Faster Training", ICML 2021
@@ -607,6 +781,7 @@ F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
 3. **Transfer Learning:** Yosinski et al., "How transferable are features in deep neural networks?", 2014
 4. **ImageNet:** Deng et al., "ImageNet: A large-scale hierarchical image database", 2009
 5. **ePillID:** Uddin et al., "ePillID: A Benchmark for Pill Identification using Deep Learning", 2021
+6. **PyTorch Checkpointing:** PyTorch Documentation, "Saving and Loading Models"
 
 ---
 
@@ -614,9 +789,16 @@ F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
 
 Dự án sử dụng **EfficientNetV2-S** với **Transfer Learning** từ ImageNet để phân loại **960 loại thuốc** dựa trên hình ảnh. Mô hình được train với **Two-Phase strategy**, **Data Augmentation**, **Label Smoothing**, và **Class Weights** để đạt được **Top-1 Accuracy ~23.46%** - một kết quả tốt cho bài toán khó với ít dữ liệu.
 
-Key takeaways:
+**Các tính năng kỹ thuật:**
+- **Resume Training:** Tiếp tục training từ checkpoint khi bị gián đoạn
+- **Checkpoint Management:** Lưu best model và periodic checkpoints
+- **TensorBoard Integration:** Visualize training progress
+- **Warning Suppression:** Tắt TensorFlow warnings không cần thiết
+
+**Key takeaways:**
 - CNN học features hierarchically (low → high level)
 - Transfer learning cho phép train tốt với ít dữ liệu
 - EfficientNetV2 balance giữa accuracy, speed, size
 - NDC code là standard cho identification thuốc
 - Data augmentation và regularization quan trọng cho small dataset
+- Resume training giúp không mất progress khi training bị gián đoạn
