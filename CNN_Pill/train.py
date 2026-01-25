@@ -269,7 +269,8 @@ class PillClassifierTrainer:
         num_classes: int,
         class_weights: Optional[torch.Tensor] = None,
         writer: Optional[SummaryWriter] = None,
-        unfreeze_epoch: int = 10
+        unfreeze_epoch: int = 10,
+        start_epoch: int = 0
     ):
         """
         Train a single fold.
@@ -289,7 +290,7 @@ class PillClassifierTrainer:
         print(f"Training Fold {fold_idx}")
         print(f"{'='*50}")
 
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             self.current_epoch = epoch
 
             # Unfreeze backbone at specified epoch
@@ -362,7 +363,8 @@ def train_random_split(
     config: Dict,
     data_manager: DataManager,
     save_dir: str,
-    device: torch.device
+    device: torch.device,
+    resume_path: Optional[str] = None
 ):
     """
     Train using random split on all data (recommended for ePillID dataset).
@@ -372,6 +374,7 @@ def train_random_split(
         data_manager: DataManager instance
         save_dir: Directory to save results
         device: Training device
+        resume_path: Path to checkpoint to resume from (optional)
     """
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(os.path.join(save_dir, 'logs'), exist_ok=True)
@@ -432,6 +435,20 @@ def train_random_split(
         warmup_epochs=config['training']['warmup_epochs']
     )
 
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    if resume_path:
+        print(f"\nLoading checkpoint from: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        print(f"Resuming from epoch {start_epoch}")
+        if 'best_acc1' in checkpoint:
+            trainer.best_acc1 = checkpoint['best_acc1']
+            trainer.best_acc5 = checkpoint['best_acc5']
+            print(f"Previous best - Acc1: {trainer.best_acc1:.2f}%, Acc5: {trainer.best_acc5:.2f}%")
+
     # TensorBoard writer
     writer = SummaryWriter(log_dir=os.path.join(save_dir, 'logs', 'train'))
 
@@ -445,7 +462,8 @@ def train_random_split(
         num_classes=num_classes,
         class_weights=class_weights,
         writer=writer,
-        unfreeze_epoch=config['training']['unfreeze_epoch']
+        unfreeze_epoch=config['training']['unfreeze_epoch'],
+        start_epoch=start_epoch
     )
 
     writer.close()
@@ -477,6 +495,8 @@ def main():
                         help='Path to dataset directory')
     parser.add_argument('--save_dir', type=str, default='checkpoints',
                         help='Path to save checkpoints')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume from')
     args = parser.parse_args()
 
     # Load or create config
@@ -531,9 +551,19 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     save_dir = os.path.join(args.save_dir, f'run_{timestamp}')
 
+    # Resume from checkpoint if specified
+    if args.resume:
+        if not os.path.exists(args.resume):
+            print(f"Error: Checkpoint not found: {args.resume}")
+            return
+        # Extract directory from resume path for save_dir
+        save_dir = os.path.dirname(args.resume)
+        print(f"Resuming from checkpoint: {args.resume}")
+        print(f"Saving to: {save_dir}")
+
     # Train with random 80/20 split
     print("Training with random 80/20 split on all data")
-    train_random_split(config, data_manager, save_dir, device)
+    train_random_split(config, data_manager, save_dir, device, resume_path=args.resume)
 
 
 if __name__ == '__main__':
