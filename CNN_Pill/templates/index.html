@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phân loại thuốc bằng CNN</title>
+    <title>PillID AI - Phân Loại Thuốc</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -12,231 +13,670 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0a0a0f;
             min-height: 100vh;
             padding: 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Animated background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background:
+                radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(168, 85, 247, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 40% 80%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
+            z-index: -1;
+            animation: gradientShift 15s ease infinite;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        /* Floating particles */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: rgba(99, 102, 241, 0.5);
+            border-radius: 50%;
+            animation: float 20s infinite;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(100vh) rotate(0deg);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-100vh) rotate(720deg);
+                opacity: 0;
+            }
         }
 
         .container {
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            animation: fadeInDown 0.8s ease;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo {
+            font-size: 3.5em;
+            margin-bottom: 15px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
         }
 
         h1 {
-            text-align: center;
-            color: #333;
+            font-size: 3em;
+            font-weight: 800;
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 10px;
-            font-size: 2.5em;
+            letter-spacing: -1px;
         }
 
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
+        .tagline {
+            color: #a1a1aa;
             font-size: 1.1em;
+            font-weight: 400;
         }
 
+        /* Stats cards */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(99, 102, 241, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            color: #71717a;
+            font-size: 0.85em;
+            margin-top: 5px;
+        }
+
+        /* Main card */
+        .main-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 40px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Upload area */
         .upload-area {
-            border: 3px dashed #667eea;
-            border-radius: 15px;
-            padding: 50px;
+            border: 2px dashed rgba(99, 102, 241, 0.3);
+            border-radius: 20px;
+            padding: 60px 40px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.3s ease;
-            background: #f8f9ff;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(99, 102, 241, 0.02);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+            opacity: 0;
+            transition: opacity 0.4s ease;
         }
 
         .upload-area:hover {
-            border-color: #764ba2;
-            background: #f0f2ff;
+            border-color: rgba(99, 102, 241, 0.6);
+            background: rgba(99, 102, 241, 0.05);
+            transform: scale(1.02);
+        }
+
+        .upload-area:hover::before {
+            opacity: 1;
         }
 
         .upload-area.dragover {
-            border-color: #764ba2;
-            background: #e8ebff;
+            border-color: #a855f7;
+            background: rgba(168, 85, 247, 0.1);
+            transform: scale(1.02);
+        }
+
+        .upload-content {
+            position: relative;
+            z-index: 1;
         }
 
         .upload-icon {
-            font-size: 60px;
+            font-size: 70px;
             margin-bottom: 20px;
+            animation: bounce 2s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
         }
 
         .upload-text {
-            font-size: 1.2em;
-            color: #555;
-            margin-bottom: 10px;
+            font-size: 1.3em;
+            color: #e4e4e7;
+            margin-bottom: 8px;
+            font-weight: 500;
         }
 
         .upload-hint {
             font-size: 0.9em;
-            color: #888;
+            color: #71717a;
         }
 
         #fileInput {
             display: none;
         }
 
+        /* Preview */
         #preview {
             margin-top: 30px;
             display: none;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
         }
 
         #preview img {
-            max-width: 100%;
-            max-height: 400px;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-height: 450px;
+            object-fit: contain;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            border: 2px solid rgba(255, 255, 255, 0.1);
         }
 
+        /* Button */
         .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 100%;
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            background-size: 200% 200%;
             color: white;
             border: none;
-            padding: 15px 40px;
+            padding: 18px 40px;
             font-size: 1.1em;
-            border-radius: 30px;
+            font-weight: 600;
+            border-radius: 16px;
             cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 20px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            margin-top: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.5s ease;
         }
 
         .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px rgba(99, 102, 241, 0.4);
+            background-position: right center;
+        }
+
+        .btn:hover::before {
+            left: 100%;
         }
 
         .btn:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
 
+        /* Loading */
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(99, 102, 241, 0.1);
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: #a1a1aa;
+            font-size: 0.95em;
+        }
+
+        /* Error */
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-top: 20px;
+            display: none;
+            text-align: center;
+        }
+
+        /* Results */
         #results {
             margin-top: 30px;
             display: none;
         }
 
+        .results-header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
         .results-title {
-            font-size: 1.5em;
-            color: #333;
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #e4e4e7;
+            margin-bottom: 8px;
+        }
+
+        .results-subtitle {
+            color: #71717a;
+            font-size: 0.95em;
+        }
+
+        .prediction-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 25px;
             margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            animation: slideIn 0.5s ease;
+            animation-fill-mode: both;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .prediction-card:nth-child(1) { animation-delay: 0.1s; }
+        .prediction-card:nth-child(2) { animation-delay: 0.2s; }
+        .prediction-card:nth-child(3) { animation-delay: 0.3s; }
+        .prediction-card:nth-child(4) { animation-delay: 0.4s; }
+        .prediction-card:nth-child(5) { animation-delay: 0.5s; }
+
+        .prediction-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(99, 102, 241, 0.3);
+            transform: translateX(5px);
+        }
+
+        .rank-badge {
+            display: inline-block;
+            width: 45px;
+            height: 45px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.3em;
+            margin-bottom: 15px;
+        }
+
+        .rank-1 .rank-badge {
+            background: linear-gradient(135deg, #fbbf24, #f59e0b);
+            color: #78350f;
+        }
+
+        .rank-2 .rank-badge {
+            background: linear-gradient(135deg, #e5e7eb, #d1d5db);
+            color: #374151;
+        }
+
+        .rank-3 .rank-badge {
+            background: linear-gradient(135deg, #d97706, #b45309);
+            color: #fef3c7;
+        }
+
+        .rank-other .rank-badge {
+            background: rgba(99, 102, 241, 0.2);
+            color: #a5b4fc;
+        }
+
+        .ndc-code {
+            font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+            font-size: 1.2em;
+            color: #e4e4e7;
+            font-weight: 600;
+            margin-bottom: 15px;
+            letter-spacing: 1px;
+        }
+
+        .confidence-display {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .confidence-value {
+            font-size: 2em;
+            font-weight: 800;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .confidence-label {
+            color: #71717a;
+            font-size: 0.9em;
+        }
+
+        .ndc-breakdown {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+
+        .ndc-part {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 12px;
             text-align: center;
         }
 
-        .prediction-item {
-            background: #f8f9ff;
-            padding: 15px 20px;
-            margin-bottom: 15px;
-            border-radius: 10px;
-            transition: all 0.3s ease;
+        .ndc-part-label {
+            color: #71717a;
+            font-size: 0.75em;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
-        .prediction-item:hover {
-            background: #f0f2ff;
+        .ndc-part-value {
+            color: #e4e4e7;
+            font-weight: 600;
+            font-size: 1.1em;
         }
 
         .confidence-bar {
             width: 100%;
-            height: 8px;
-            background: #e0e0e0;
-            border-radius: 4px;
-            margin-top: 8px;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
             overflow: hidden;
+            margin-bottom: 15px;
         }
 
         .confidence-fill {
             height: 100%;
-            background: linear-gradient(90deg, #667eea, #764ba2);
-            transition: width 0.5s ease;
+            border-radius: 5px;
+            transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+            background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899);
+            background-size: 200% 100%;
+            animation: shimmer 2s ease-in-out infinite;
         }
 
-        .loading {
-            display: none;
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .lookup-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            width: 100%;
+            justify-content: center;
+        }
+
+        .lookup-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+
+            .stats {
+                grid-template-columns: 1fr;
+            }
+
+            .main-card {
+                padding: 25px;
+            }
+
+            .upload-area {
+                padding: 40px 25px;
+            }
+
+            .ndc-breakdown {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Footer */
+        .footer {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 40px;
+            color: #52525b;
+            font-size: 0.85em;
         }
 
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
+        .footer a {
+            color: #818cf8;
+            text-decoration: none;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .error {
-            background: #ffe6e6;
-            color: #d63031;
-            padding: 15px 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-            display: none;
-        }
-
-        .model-info {
-            background: #f0f8ff;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            font-size: 0.9em;
-            color: #555;
-        }
-
-        .model-info strong {
-            color: #333;
+        .footer a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
 <body>
+    <!-- Floating particles -->
+    <div class="particles" id="particles"></div>
+
     <div class="container">
-        <h1>🔬 Phân Loại Thuốc</h1>
-        <p class="subtitle">CNN - Deep Learning Model</p>
-
-        <div class="model-info">
-            <strong>Model:</strong> EfficientNetV2-S |
-            <strong>Classes:</strong> 960 types |
-            <strong>Best Val Acc:</strong> 23.46%
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">💊</div>
+            <h1>PillID AI</h1>
+            <p class="tagline">Deep Learning Drug Identification System</p>
         </div>
 
-        <div class="upload-area" id="uploadArea">
-            <div class="upload-icon">📸</div>
-            <div class="upload-text">Kéo thả ảnh vào đây hoặc click để chọn</div>
-            <div class="upload-hint">Hỗ trợ: PNG, JPG, JPEG, BMP, GIF, TIF, WEBP (tối đa 16MB)</div>
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value">960</div>
+                <div class="stat-label">Drug Types</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">23.5%</div>
+                <div class="stat-label">Top-1 Accuracy</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">43%</div>
+                <div class="stat-label">Top-5 Accuracy</div>
+            </div>
         </div>
 
-        <input type="file" id="fileInput" accept="image/*">
+        <!-- Main card -->
+        <div class="main-card">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-content">
+                    <div class="upload-icon">📸</div>
+                    <div class="upload-text">Drop your pill image here</div>
+                    <div class="upload-hint">or click to browse • PNG, JPG, JPEG up to 16MB</div>
+                </div>
+            </div>
 
-        <div id="preview">
-            <img id="previewImage" alt="Preview">
+            <input type="file" id="fileInput" accept="image/*">
+
+            <div id="preview">
+                <img id="previewImage" alt="Preview">
+            </div>
+
+            <button class="btn" id="predictBtn" disabled>
+                🔍 Identify Pill
+            </button>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <div class="loading-text">Analyzing image with AI...</div>
+            </div>
+
+            <div class="error" id="error"></div>
+
+            <div id="results">
+                <div class="results-header">
+                    <div class="results-title">Analysis Results</div>
+                    <div class="results-subtitle">Top 5 predictions sorted by confidence</div>
+                </div>
+                <div id="predictionsList"></div>
+            </div>
         </div>
 
-        <button class="btn" id="predictBtn" disabled>🔍 Phân Loại</button>
-
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p style="margin-top: 10px; color: #666;">Đang phân loại...</p>
-        </div>
-
-        <div class="error" id="error"></div>
-
-        <div id="results">
-            <div class="results-title">📊 Kết Quả Dự Đoán (Top 5)</div>
-            <div id="predictionsList"></div>
+        <!-- Footer -->
+        <div class="footer">
+            Powered by <a href="https://github.com/rwightman/pytorch-image-models" target="_blank">EfficientNetV2</a> •
+            <a href="https://druginfo.nlm.nih.gov/drugportal/" target="_blank">NIH Drug Portal</a>
         </div>
     </div>
 
     <script>
+        // Create floating particles
+        const particlesContainer = document.getElementById('particles');
+        for (let i = 0; i < 30; i++) {
+            const particle = document.createElement('div');
+            particle.className = 'particle';
+            particle.style.left = Math.random() * 100 + '%';
+            particle.style.animationDelay = Math.random() * 20 + 's';
+            particle.style.animationDuration = (15 + Math.random() * 10) + 's';
+            particlesContainer.appendChild(particle);
+        }
+
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const preview = document.getElementById('preview');
@@ -249,17 +689,14 @@
 
         let selectedFile = null;
 
-        // Click to upload
         uploadArea.addEventListener('click', () => fileInput.click());
 
-        // File selection
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
                 handleFile(e.target.files[0]);
             }
         });
 
-        // Drag and drop
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
@@ -279,13 +716,12 @@
 
         function handleFile(file) {
             if (!file.type.startsWith('image/')) {
-                showError('Vui lòng chọn file ảnh hợp lệ');
+                showError('Please select a valid image file');
                 return;
             }
 
             selectedFile = file;
 
-            // Show preview
             const reader = new FileReader();
             reader.onload = (e) => {
                 previewImage.src = e.target.result;
@@ -298,7 +734,6 @@
             hideResults();
         }
 
-        // Predict button
         predictBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
 
@@ -335,57 +770,53 @@
             predictionsList.innerHTML = '';
 
             data.predictions.forEach((pred, index) => {
-                const item = document.createElement('div');
-                item.className = 'prediction-item';
-
+                const rank = index + 1;
                 const confidence = parseFloat(pred.confidence);
-                const color = getColor(index);
-
-                // Parse NDC code
                 const ndcInfo = parseNDCCode(pred.label);
                 const lookupUrl = `https://druginfo.nlm.nih.gov/drugportal/search?query=${ndcInfo.baseCode}`;
 
-                item.innerHTML = `
-                    <div style="width: 100%;">
-                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                            <div style="width: 40px; font-weight: bold; color: ${color};">#${pred.rank}</div>
-                            <div style="flex: 1;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                    <div>
-                                        <div style="font-size: 0.85em; color: #888;">NDC Code:</div>
-                                        <div style="font-family: monospace; font-size: 1.1em; color: #333; font-weight: bold;">${ndcInfo.formatted}</div>
-                                    </div>
-                                    <span style="font-weight: bold; color: ${color}; font-size: 1.2em;">${pred.confidence}</span>
-                                </div>
-                            </div>
+                const card = document.createElement('div');
+                card.className = `prediction-card rank-${rank <= 3 ? rank : 'other'}`;
+
+                card.innerHTML = `
+                    <div class="rank-badge">#${rank}</div>
+                    <div class="ndc-code">${ndcInfo.formatted}</div>
+                    <div class="confidence-display">
+                        <span class="confidence-label">Confidence</span>
+                        <span class="confidence-value">${pred.confidence}</span>
+                    </div>
+                    <div class="ndc-breakdown">
+                        <div class="ndc-part">
+                            <div class="ndc-part-label">Labeler</div>
+                            <div class="ndc-part-value">${ndcInfo.labeler}</div>
                         </div>
-                        <div style="background: #f0f8ff; padding: 10px; border-radius: 8px; margin-bottom: 8px; font-size: 0.9em;">
-                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px;">
-                                <div><strong style="color: #667eea;">Labeler:</strong> ${ndcInfo.labeler}</div>
-                                <div><strong style="color: #764ba2;">Product:</strong> ${ndcInfo.product}</div>
-                                <div><strong style="color: #f093fb;">Package:</strong> ${ndcInfo.package}</div>
-                            </div>
-                            <a href="${lookupUrl}" target="_blank" style="display: inline-block; padding: 6px 12px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; text-decoration: none; border-radius: 5px; font-size: 0.85em;">
-                                🔍 Tra cứu trên NIH Drug Database
-                            </a>
+                        <div class="ndc-part">
+                            <div class="ndc-part-label">Product</div>
+                            <div class="ndc-part-value">${ndcInfo.product}</div>
                         </div>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" style="width: ${confidence}%; background: linear-gradient(90deg, ${color}, ${color}99);"></div>
+                        <div class="ndc-part">
+                            <div class="ndc-part-label">Package</div>
+                            <div class="ndc-part-value">${ndcInfo.package}</div>
                         </div>
                     </div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: ${confidence}%"></div>
+                    </div>
+                    <a href="${lookupUrl}" target="_blank" class="lookup-btn">
+                        🔍 Search on NIH Drug Database
+                    </a>
                 `;
 
-                predictionsList.appendChild(item);
+                predictionsList.appendChild(card);
             });
 
             results.style.display = 'block';
         }
 
         function parseNDCCode(label) {
-            // Parse NDC code like "51285-0092-87_BE305F72"
             const parts = label.split('_');
-            const ndcCode = parts[0]; // "51285-0092-87"
-            const hash = parts[1] || ''; // "BE305F72"
+            const ndcCode = parts[0];
+            const hash = parts[1] || '';
 
             const segments = ndcCode.split('-');
             const labeler = segments[0] || 'N/A';
@@ -400,11 +831,6 @@
                 package: pkg,
                 hash: hash
             };
-        }
-
-        function getColor(index) {
-            const colors = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#43e97b'];
-            return colors[index % colors.length];
         }
 
         function showError(message) {
