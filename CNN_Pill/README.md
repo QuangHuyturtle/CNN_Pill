@@ -51,6 +51,7 @@ CNN_Pill/
 ├── app.py                               # Flask Web Application
 ├── train.py                             # Script huấn luyện (với resume)
 ├── inference.py                         # Script inference
+├── plot_metrics.py                      # Script vẽ biểu đồ training metrics
 ├── config.yaml                          # File cấu hình
 ├── requirements.txt                     # Dependencies
 ├── README.md                            # File hướng dẫn này
@@ -319,6 +320,59 @@ Mở trình duyệt tại: http://localhost:6006
 - **Top-5 Accuracy:** % lớp đúng nằm trong top 5
 - **Loss:** Cross-Entropy loss với label smoothing
 - **Learning Rate:** Theo dõi thay đổi LR qua các epoch
+
+### Vẽ biểu đồ Training Metrics
+
+Sau khi training xong, bạn có thể vẽ 2 biểu đồ để xem quá trình training:
+
+**Biểu đồ 1: Train Loss over Epochs** - Xem quá trình train giảm loss qua các epoch
+**Biểu đồ 2: Accuracy Comparison** - So sánh Train vs Validation vs Test accuracy
+
+```bash
+# Vẽ 2 biểu đồ và lưu vào file (tự động thêm timestamp)
+python plot_metrics.py --log_dir checkpoints/run_20260125_065908/logs/train --save training_curves
+
+# Chỉ lưu file, không hiển thị trên màn hình
+python plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --save curves --no_show
+
+# Chỉnh sửa fold index (nếu train multi-fold)
+python plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --fold 0 --save curves
+```
+
+#### Các tham số
+
+| Tham số | Mô tả |
+|---------|---------|
+| `--log_dir` | Đường dẫn đến thư mục TensorBoard logs |
+| `--save` | Tên file lưu (sẽ tự thêm timestamp và `_loss.png`/`_accuracy.png`) |
+| `--no_show` | Không hiển thị biểu đồ trên màn hình |
+| `--fold` | Chọn fold để vẽ (mặc định: 0) |
+
+#### Ví dụ output
+
+Khi chạy với `--save training_curves`, sẽ tạo 2 file ảnh với timestamp:
+- `training_curves_20260303_103045_loss.png` - Biểu đồ Train Loss (y = loss, x = epochs)
+- `training_curves_20260303_103045_accuracy.png` - Biểu đồ Accuracy (3 đường: Train/Val/Test)
+
+**Lưu ý:** Timestamp tự động thêm vào tên file để tránh ghi đè khi chạy nhiều lần.
+
+**Biểu đồ 1 - Train Loss:**
+- **Trục X:** Epoch
+- **Trục Y:** Loss
+- **Đường:** Train Loss (xanh dương) - xem quá trình train
+- **Annotation:** Final loss và Best loss với epoch tương ứng
+
+**Biểu đồ 2 - Accuracy Comparison:**
+- **Trục X:** Epoch
+- **Trục Y:** Accuracy (%)
+- **Đường màu xanh lá:** Train Accuracy
+- **Đường màu xanh dương:** Validation Accuracy
+- **Đường màu đỏ (nếu có test):** Test Accuracy
+- **Annotation:** Best validation accuracy với epoch tương ứng
+
+**Lưu ý về Test metrics:**
+- Code hiện tại chỉ log Train và Validation metrics
+- Để có đường Test, bạn cần thêm test phase vào `train.py` hoặc có dataset test riêng
 
 ---
 
