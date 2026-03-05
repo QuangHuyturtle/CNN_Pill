@@ -7,8 +7,6 @@ import os
 import pickle
 from typing import Dict, List, Tuple, Optional
 
-import cv2
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -246,14 +244,23 @@ class DataManager:
         print(f"Fold {fold_idx}: Using {num_classes} common labels (from {len(train_labels)} train classes, {len(val_labels)} val classes)")
         print(f"Fold {fold_idx}: Train={len(train_df)}, Val={len(val_df)} samples")
 
-        # Training transforms with augmentation
+        # Training transforms with aggressive augmentation to reduce overfitting
         train_transform = transforms.Compose([
-            transforms.Resize((self.image_size, self.image_size)),
+            transforms.Resize((int(self.image_size * 1.1), int(self.image_size * 1.1))),  # Slightly larger for random crop
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=15),
-            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomVerticalFlip(p=0.3),
+            transforms.RandomRotation(degrees=30),
+            transforms.RandomAffine(
+                degrees=0,
+                translate=(0.15, 0.15),
+                scale=(0.85, 1.15),
+                shear=5
+            ),
+            transforms.RandomResizedCrop(self.image_size, scale=(0.7, 1.0)),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomGrayscale(p=0.1),
             transforms.ToTensor(),
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225]
@@ -392,14 +399,23 @@ class DataManager:
 
         print(f"Random split: Train={len(train_df)}, Val={len(val_df)}")
 
-        # Training transforms with augmentation
+        # Training transforms with aggressive augmentation to reduce overfitting
         train_transform = transforms.Compose([
-            transforms.Resize((self.image_size, self.image_size)),
+            transforms.Resize((int(self.image_size * 1.1), int(self.image_size * 1.1))),  # Slightly larger for random crop
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=15),
-            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomVerticalFlip(p=0.3),
+            transforms.RandomRotation(degrees=30),
+            transforms.RandomAffine(
+                degrees=0,
+                translate=(0.15, 0.15),
+                scale=(0.85, 1.15),
+                shear=5
+            ),
+            transforms.RandomResizedCrop(self.image_size, scale=(0.7, 1.0)),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomGrayscale(p=0.1),
             transforms.ToTensor(),
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225]

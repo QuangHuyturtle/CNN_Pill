@@ -17,7 +17,8 @@ class EfficientNetPillClassifier(nn.Module):
         num_classes: Number of pill classes (4902 for ePillID dataset)
         model_name: EfficientNetV2 variant ('efficientnetv2_s', 'm', 'l')
         pretrained: Whether to use ImageNet pretrained weights
-        dropout_rate: Dropout probability for regularization
+        dropout_rate: Dropout probability for regularization (first dropout layer)
+        dropout_head_extra: Additional dropout probability for regularization (second dropout layer)
         freeze_backbone: Whether to freeze backbone weights initially
     """
 
@@ -27,6 +28,7 @@ class EfficientNetPillClassifier(nn.Module):
         model_name: str = "efficientnetv2_s",
         pretrained: bool = True,
         dropout_rate: float = 0.3,
+        dropout_head_extra: float = 0.15,
         freeze_backbone: bool = False
     ):
         super().__init__()
@@ -50,13 +52,13 @@ class EfficientNetPillClassifier(nn.Module):
             for param in self.backbone.parameters():
                 param.requires_grad = False
 
-        # Custom classification head
+        # Custom classification head with strong regularization
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout_rate),
             nn.Linear(self.feature_dim, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=dropout_rate / 2),
+            nn.Dropout(p=dropout_head_extra),
             nn.Linear(512, num_classes)
         )
 

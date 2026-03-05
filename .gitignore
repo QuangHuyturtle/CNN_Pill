@@ -57,3 +57,5 @@ Thumbs.db
 
 # Local config
 config_local.yaml
+
+.claude

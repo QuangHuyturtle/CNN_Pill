@@ -9,7 +9,6 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import sys
-import time
 import yaml
 import argparse
 from datetime import datetime
@@ -28,6 +27,62 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models.efficientnet_pill import create_model, get_model_info
 from utils.dataset import DataManager
+
+
+class EarlyStopping:
+    """Early stopping to stop training when validation loss doesn't improve."""
+
+    def __init__(
+        self,
+        patience: int = 7,
+        min_delta: float = 0.0,
+        mode: str = 'max'  # 'max' for accuracy, 'min' for loss
+    ):
+        """
+        Args:
+            patience: Number of epochs to wait before stopping
+            min_delta: Minimum change to qualify as improvement
+            mode: 'max' for metrics to maximize, 'min' for metrics to minimize
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, score: float) -> bool:
+        """
+        Check if training should stop.
+
+        Args:
+            score: Current validation score
+
+        Returns:
+            True if should stop, False otherwise
+        """
+        if self.best_score is None:
+            self.best_score = score
+            return False
+
+        if self.mode == 'max':
+            if score > self.best_score + self.min_delta:
+                self.best_score = score
+                self.counter = 0
+            else:
+                self.counter += 1
+        else:  # mode == 'min'
+            if score < self.best_score - self.min_delta:
+                self.best_score = score
+                self.counter = 0
+            else:
+                self.counter += 1
+
+        if self.counter >= self.patience:
+            self.early_stop = True
+            return True
+
+        return False
 
 
 class MetricsTracker:
@@ -86,8 +141,8 @@ class PillClassifierTrainer:
         device: Device to train on (cuda/cpu)
         num_classes: Number of output classes
         learning_rate: Initial learning rate
-        weight_decay: L2 regularization factor
         use_class_weights: Use weighted loss for imbalanced classes
+        max_grad_norm: Maximum gradient norm for clipping
     """
 
     def __init__(
@@ -96,15 +151,16 @@ class PillClassifierTrainer:
         device: torch.device,
         num_classes: int = 960,
         learning_rate: float = 1e-3,
-        weight_decay: float = 1e-4,
         use_class_weights: bool = True,
-        label_smoothing: float = 0.1
+        label_smoothing: float = 0.1,
+        max_grad_norm: float = 0.5
     ):
         self.model = model.to(device)
         self.device = device
         self.num_classes = num_classes
         self.learning_rate = learning_rate
         self.use_class_weights = use_class_weights
+        self.max_grad_norm = max_grad_norm
 
         # Loss function
         self.criterion = nn.CrossEntropyLoss(
@@ -123,7 +179,8 @@ class PillClassifierTrainer:
     def setup_optimizer(
         self,
         backbone_lr_multiplier: float = 0.1,
-        optimizer_type: str = 'adamw'
+        optimizer_type: str = 'adamw',
+        weight_decay: float = 1e-4
     ):
         """Setup optimizer with differential learning rates."""
         param_groups = self.model.get_param_groups(
@@ -134,13 +191,13 @@ class PillClassifierTrainer:
         if optimizer_type == 'adamw':
             self.optimizer = optim.AdamW(
                 param_groups,
-                weight_decay=1e-4
+                weight_decay=weight_decay
             )
         elif optimizer_type == 'sgd':
             self.optimizer = optim.SGD(
                 param_groups,
                 momentum=0.9,
-                weight_decay=1e-4
+                weight_decay=weight_decay
             )
         else:
             raise ValueError(f"Unknown optimizer: {optimizer_type}")
@@ -201,8 +258,9 @@ class PillClassifierTrainer:
             # Backward pass
             loss.backward()
 
-            # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            # Gradient clipping for stability (configurable)
+            max_grad_norm = getattr(self, 'max_grad_norm', 1.0)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_grad_norm)
 
             self.optimizer.step()
 
@@ -270,10 +328,12 @@ class PillClassifierTrainer:
         class_weights: Optional[torch.Tensor] = None,
         writer: Optional[SummaryWriter] = None,
         unfreeze_epoch: int = 10,
-        start_epoch: int = 0
+        start_epoch: int = 0,
+        early_stopping_patience: int = 7,
+        early_stopping_delta: float = 0.001
     ):
         """
-        Train a single fold.
+        Train a single fold with early stopping.
 
         Args:
             train_loader: Training data loader
@@ -285,10 +345,20 @@ class PillClassifierTrainer:
             class_weights: Optional class weights for loss function
             writer: TensorBoard writer
             unfreeze_epoch: Epoch to unfreeze backbone
+            early_stopping_patience: Patience for early stopping
+            early_stopping_delta: Minimum improvement for early stopping
         """
         print(f"\n{'='*50}")
         print(f"Training Fold {fold_idx}")
         print(f"{'='*50}")
+        print(f"Early Stopping: patience={early_stopping_patience}, delta={early_stopping_delta}")
+
+        # Initialize early stopping
+        early_stopping = EarlyStopping(
+            patience=early_stopping_patience,
+            min_delta=early_stopping_delta,
+            mode='max'
+        )
 
         for epoch in range(start_epoch, num_epochs):
             self.current_epoch = epoch
@@ -353,6 +423,15 @@ class PillClassifierTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                 }, save_path)
 
+            # Early stopping check
+            if early_stopping(val_metrics['acc1']):
+                print(f"\n{'='*50}")
+                print(f"EARLY STOPPING at epoch {epoch}")
+                print(f"Best validation accuracy: {early_stopping.best_score:.2f}%")
+                print(f"No improvement for {early_stopping.counter} epochs")
+                print(f"{'='*50}")
+                break
+
         print(f"\nFold {fold_idx} completed!")
         print(f"Best Val - Acc1: {self.best_acc1:.2f}%, Acc5: {self.best_acc5:.2f}%")
 
@@ -399,12 +478,13 @@ def train_random_split(
     if config['training']['use_class_weights']:
         class_weights = data_manager.get_all_class_weights(num_classes)
 
-    # Create model
+    # Create model with dropout_head_extra for additional regularization
     model = create_model(
         num_classes=num_classes,
         model_size=config['model']['size'],
         pretrained=config['model']['pretrained'],
         dropout_rate=config['model']['dropout'],
+        dropout_head_extra=config['model'].get('dropout_head_extra', 0.15),
         freeze_backbone=config['model']['freeze_backbone']
     )
 
@@ -414,6 +494,9 @@ def train_random_split(
     print(f"Parameters: {info['trainable_params']:,} trainable / {info['total_params']:,} total")
     print(f"Model size: {info['model_size_mb']:.2f} MB")
 
+    # Get weight decay from config or default
+    weight_decay = config['model'].get('weight_decay', 0.01)
+
     # Create trainer
     trainer = PillClassifierTrainer(
         model=model,
@@ -421,12 +504,14 @@ def train_random_split(
         num_classes=num_classes,
         learning_rate=config['training']['learning_rate'],
         use_class_weights=config['training']['use_class_weights'],
-        label_smoothing=config['training']['label_smoothing']
+        label_smoothing=config['training']['label_smoothing'],
+        max_grad_norm=config['training'].get('max_grad_norm', 0.5)
     )
 
     trainer.setup_optimizer(
         backbone_lr_multiplier=config['training']['backbone_lr_multiplier'],
-        optimizer_type=config['training']['optimizer']
+        optimizer_type=config['training']['optimizer'],
+        weight_decay=weight_decay
     )
 
     trainer.setup_scheduler(
@@ -463,7 +548,9 @@ def train_random_split(
         class_weights=class_weights,
         writer=writer,
         unfreeze_epoch=config['training']['unfreeze_epoch'],
-        start_epoch=start_epoch
+        start_epoch=start_epoch,
+        early_stopping_patience=config['training'].get('early_stopping_patience', 7),
+        early_stopping_delta=config['training'].get('early_stopping_delta', 0.001)
     )
 
     writer.close()

@@ -1,19 +1,24 @@
 data:
   augmentation: true
-  batch_size: 32
-  num_workers: 4
+  batch_size: 16
+  num_workers: 2
 model:
-  dropout: 0.3
+  dropout: 0.5                 
+  dropout_head_extra: 0.25          
   freeze_backbone: true
   pretrained: true
   size: s
+  weight_decay: 0.01
 training:
-  backbone_lr_multiplier: 0.1
-  label_smoothing: 0.1
-  learning_rate: 0.001
-  num_epochs: 25
+  backbone_lr_multiplier: 0.005
+  early_stopping_patience: 10
+  early_stopping_delta: 0.001
+  label_smoothing: 0.1               
+  learning_rate: 0.002                 
+  max_grad_norm: 0.5
+  num_epochs: 30
   optimizer: adamw
   scheduler: cosine
-  unfreeze_epoch: 10
+  unfreeze_epoch: 20
   use_class_weights: true
-  warmup_epochs: 5
+  warmup_epochs: 3
