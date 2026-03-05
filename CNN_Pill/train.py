@@ -1,6 +1,7 @@
 """
 Training script for Pill Image Classification with EfficientNetV2
 Uses random 80/20 split on all data (recommended for ePillID dataset)
+Supports ensemble training for improved performance
 """
 
 import os
@@ -27,6 +28,53 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models.efficientnet_pill import create_model, get_model_info
 from utils.dataset import DataManager
+
+
+class MetricsTracker:
+    """Track and compute training metrics."""
+
+    def __init__(self, num_classes: int):
+        self.num_classes = num_classes
+        self.reset()
+
+    def reset(self):
+        self.correct = 0
+        self.total = 0
+        self.losses = []
+        self.top5_correct = 0
+
+    def update(self, outputs: torch.Tensor, targets: torch.Tensor, loss: float):
+        """
+        Update metrics with a batch.
+
+        Args:
+            outputs: Model predictions (logits)
+            targets: Ground truth labels
+            loss: Batch loss value
+        """
+        self.losses.append(loss)
+
+        # Top-1 accuracy
+        _, predicted = outputs.max(1)
+        self.total += targets.size(0)
+        self.correct += predicted.eq(targets).sum().item()
+
+        # Top-5 accuracy
+        _, top5_predicted = outputs.topk(5, dim=1)
+        top5_correct = top5_predicted.eq(targets.view(-1, 1).expand_as(top5_predicted))
+        self.top5_correct += top5_correct.any(dim=1).sum().item()
+
+    def get_metrics(self) -> Dict[str, float]:
+        """Return current metrics."""
+        loss = np.mean(self.losses) if self.losses else 0.0
+        acc1 = 100.0 * self.correct / self.total if self.total > 0 else 0.0
+        acc5 = 100.0 * self.top5_correct / self.total if self.total > 0 else 0.0
+
+        return {
+            'loss': loss,
+            'acc1': acc1,
+            'acc5': acc5
+        }
 
 
 class EarlyStopping:
@@ -83,53 +131,6 @@ class EarlyStopping:
             return True
 
         return False
-
-
-class MetricsTracker:
-    """Track and compute training metrics."""
-
-    def __init__(self, num_classes: int):
-        self.num_classes = num_classes
-        self.reset()
-
-    def reset(self):
-        self.correct = 0
-        self.total = 0
-        self.losses = []
-        self.top5_correct = 0
-
-    def update(self, outputs: torch.Tensor, targets: torch.Tensor, loss: float):
-        """
-        Update metrics with a batch.
-
-        Args:
-            outputs: Model predictions (logits)
-            targets: Ground truth labels
-            loss: Batch loss value
-        """
-        self.losses.append(loss)
-
-        # Top-1 accuracy
-        _, predicted = outputs.max(1)
-        self.total += targets.size(0)
-        self.correct += predicted.eq(targets).sum().item()
-
-        # Top-5 accuracy
-        _, top5_predicted = outputs.topk(5, dim=1)
-        top5_correct = top5_predicted.eq(targets.view(-1, 1).expand_as(top5_predicted))
-        self.top5_correct += top5_correct.any(dim=1).sum().item()
-
-    def get_metrics(self) -> Dict[str, float]:
-        """Return current metrics."""
-        loss = np.mean(self.losses) if self.losses else 0.0
-        acc1 = 100.0 * self.correct / self.total if self.total > 0 else 0.0
-        acc5 = 100.0 * self.top5_correct / self.total if self.total > 0 else 0.0
-
-        return {
-            'loss': loss,
-            'acc1': acc1,
-            'acc5': acc5
-        }
 
 
 class PillClassifierTrainer:
@@ -351,7 +352,6 @@ class PillClassifierTrainer:
         print(f"\n{'='*50}")
         print(f"Training Fold {fold_idx}")
         print(f"{'='*50}")
-        print(f"Early Stopping: patience={early_stopping_patience}, delta={early_stopping_delta}")
 
         # Initialize early stopping
         early_stopping = EarlyStopping(
@@ -443,7 +443,8 @@ def train_random_split(
     data_manager: DataManager,
     save_dir: str,
     device: torch.device,
-    resume_path: Optional[str] = None
+    resume_path: Optional[str] = None,
+    ensemble_seed: Optional[int] = None
 ):
     """
     Train using random split on all data (recommended for ePillID dataset).
@@ -454,6 +455,7 @@ def train_random_split(
         save_dir: Directory to save results
         device: Training device
         resume_path: Path to checkpoint to resume from (optional)
+        ensemble_seed: Random seed for ensemble training (optional)
     """
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(os.path.join(save_dir, 'logs'), exist_ok=True)
@@ -465,12 +467,14 @@ def train_random_split(
     print(f"\n{'='*60}")
     print("TRAINING ON ALL DATA (Random 80/20 Split)")
     print(f"{'='*60}")
+    if ensemble_seed is not None:
+        print(f"Ensemble mode - Seed: {ensemble_seed}")
 
     # Get data loaders for all data with random split
     train_loader, val_loader, num_classes = data_manager.get_all_data_loaders(
         augmentation=config['data']['augmentation'],
         train_ratio=0.8,
-        random_seed=42
+        random_seed=42 if ensemble_seed is None else ensemble_seed
     )
 
     # Get class weights for all data
@@ -478,7 +482,7 @@ def train_random_split(
     if config['training']['use_class_weights']:
         class_weights = data_manager.get_all_class_weights(num_classes)
 
-    # Create model with dropout_head_extra for additional regularization
+    # Create model
     model = create_model(
         num_classes=num_classes,
         model_size=config['model']['size'],
@@ -494,10 +498,8 @@ def train_random_split(
     print(f"Parameters: {info['trainable_params']:,} trainable / {info['total_params']:,} total")
     print(f"Model size: {info['model_size_mb']:.2f} MB")
 
-    # Get weight decay from config or default
-    weight_decay = config['model'].get('weight_decay', 0.01)
-
     # Create trainer
+    weight_decay = config['model'].get('weight_decay', 0.01)
     trainer = PillClassifierTrainer(
         model=model,
         device=device,
@@ -537,7 +539,7 @@ def train_random_split(
     # TensorBoard writer
     writer = SummaryWriter(log_dir=os.path.join(save_dir, 'logs', 'train'))
 
-    # Train the model
+    # Train model
     best_acc1, best_acc5 = trainer.train_fold(
         train_loader=train_loader,
         val_loader=val_loader,
@@ -575,7 +577,7 @@ def train_random_split(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Pill Image Classifier')
+    parser = argparse.ArgumentParser(description='Train Pill Image Classifier with Ensemble Support')
     parser.add_argument('--config', type=str, default='config.yaml',
                         help='Path to config file')
     parser.add_argument('--data_dir', type=str, default='data',
@@ -584,6 +586,14 @@ def main():
                         help='Path to save checkpoints')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
+    parser.add_argument('--ensemble', action='store_true',
+                        help='Enable ensemble training (train multiple models)')
+    parser.add_argument('--num_models', type=int, default=3,
+                        help='Number of models for ensemble training (default: 3)')
+    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 123, 999],
+                        help='Random seeds for each model (default: 42 123 999)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for single model training (default: 42)')
     args = parser.parse_args()
 
     # Load or create config
@@ -634,24 +644,75 @@ def main():
         num_workers=config['data']['num_workers']
     )
 
-    # Create save directory with timestamp
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    save_dir = os.path.join(args.save_dir, f'run_{timestamp}')
+    # Ensemble training: train multiple models with different seeds
+    if args.ensemble:
+        num_models = args.num_models
+        seeds = args.seeds[:num_models]  # Take first N seeds
+        print(f"\n{'='*60}")
+        print(f"ENSEMBLE TRAINING: {num_models} models with seeds {seeds}")
+        print(f"{'='*60}")
 
-    # Resume from checkpoint if specified
-    if args.resume:
-        if not os.path.exists(args.resume):
-            print(f"Error: Checkpoint not found: {args.resume}")
-            return
-        # Extract directory from resume path for save_dir
-        save_dir = os.path.dirname(args.resume)
-        print(f"Resuming from checkpoint: {args.resume}")
-        print(f"Saving to: {save_dir}")
+        ensemble_results = []
 
-    # Train with random 80/20 split
-    print("Training with random 80/20 split on all data")
-    train_random_split(config, data_manager, save_dir, device, resume_path=args.resume)
+        for i, seed in enumerate(seeds):
+            print(f"\n{'='*60}")
+            print(f"Training Model {i+1}/{num_models} (seed={seed})")
+            print(f"{'='*60}")
 
+            # Create save directory for this model
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            model_save_dir = os.path.join(args.save_dir, f'run_{timestamp}_model{i+1}')
+            os.makedirs(model_save_dir, exist_ok=True)
+
+            # Train this model
+            train_random_split(config, data_manager, model_save_dir, device,
+                                resume_path=None, ensemble_seed=seed)
+
+            # Load results to track best model
+            results_path = os.path.join(model_save_dir, 'results.yaml')
+            if os.path.exists(results_path):
+                with open(results_path, 'r') as f:
+                    results = yaml.safe_load(f)
+                    ensemble_results.append({
+                        'model_idx': i+1,
+                        'seed': seed,
+                        'best_acc1': results.get('best_acc1', 0),
+                        'best_acc5': results.get('best_acc5', 0),
+                        'save_dir': model_save_dir
+                    })
+
+        # Print ensemble summary
+        print(f"\n{'='*60}")
+        print("ENSEMBLE TRAINING SUMMARY")
+        print(f"{'='*60}")
+        for result in ensemble_results:
+            print(f"Model {result['model_idx']} (seed={result['seed']}): "
+                  f"Val Acc1={result['best_acc1']:.2f}%, Acc5={result['best_acc5']:.2f}%")
+
+        # Find best model
+        best_model = max(ensemble_results, key=lambda x: x['best_acc1'])
+        print(f"\nBest model: Model {best_model['model_idx']} (seed={best_model['seed']})")
+        print(f"Best Val Acc1: {best_model['best_acc1']:.2f}%")
+        print(f"Use checkpoint: {best_model['save_dir']}/best_fold0.pth")
+    else:
+        # Single model training (original logic)
+        # Create save directory with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        save_dir = os.path.join(args.save_dir, f'run_{timestamp}')
+
+        # Resume from checkpoint if specified
+        if args.resume:
+            if not os.path.exists(args.resume):
+                print(f"Error: Checkpoint not found: {args.resume}")
+                return
+            # Extract directory from resume path for save_dir
+            save_dir = os.path.dirname(args.resume)
+            print(f"Resuming from checkpoint: {args.resume}")
+            print(f"Saving to: {save_dir}")
+
+        # Train with random 80/20 split
+        print(f"Training with random 80/20 split on all data (seed={args.seed})")
+        train_random_split(config, data_manager, save_dir, device, resume_path=args.resume, ensemble_seed=args.seed)
 
 if __name__ == '__main__':
     main()
