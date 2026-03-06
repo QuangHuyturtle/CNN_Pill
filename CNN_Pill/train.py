@@ -1,6 +1,6 @@
 """
 Training script for Pill Image Classification with EfficientNetV2
-Uses random 80/20 split on all data (recommended for ePillID dataset)
+Uses random 70/15/15 split on all data (recommended for ePillID dataset)
 Supports ensemble training for improved performance
 """
 
@@ -447,7 +447,7 @@ def train_random_split(
     ensemble_seed: Optional[int] = None
 ):
     """
-    Train using random split on all data (recommended for ePillID dataset).
+    Train using random 70/15/15 split on all data (recommended for ePillID dataset).
 
     Args:
         config: Training configuration dict
@@ -465,22 +465,30 @@ def train_random_split(
         yaml.dump(config, f)
 
     print(f"\n{'='*60}")
-    print("TRAINING ON ALL DATA (Random 80/20 Split)")
+    print("TRAINING ON ALL DATA (Random Split)")
     print(f"{'='*60}")
     if ensemble_seed is not None:
         print(f"Ensemble mode - Seed: {ensemble_seed}")
 
-    # Get data loaders for all data with random split
-    train_loader, val_loader, num_classes = data_manager.get_all_data_loaders(
+    # Get data loaders for all data with random split (70/15/15)
+    train_loader, val_loader, _, num_classes = data_manager.get_all_data_loaders(
         augmentation=config['data']['augmentation'],
-        train_ratio=0.8,
+        train_ratio=0.7,
+        val_ratio=0.15,
+        test_ratio=0.15,
         random_seed=42 if ensemble_seed is None else ensemble_seed
     )
 
-    # Get class weights for all data
+    # Get class weights for training data (using same split as data loaders)
     class_weights = None
     if config['training']['use_class_weights']:
-        class_weights = data_manager.get_all_class_weights(num_classes)
+        class_weights = data_manager.get_all_class_weights(
+            train_ratio=0.7,
+            val_ratio=0.15,
+            test_ratio=0.15,
+            random_seed=42 if ensemble_seed is None else ensemble_seed,
+            num_classes=num_classes
+        )
 
     # Create model
     model = create_model(
@@ -710,8 +718,8 @@ def main():
             print(f"Resuming from checkpoint: {args.resume}")
             print(f"Saving to: {save_dir}")
 
-        # Train with random 80/20 split
-        print(f"Training with random 80/20 split on all data (seed={args.seed})")
+        # Train with random 70/15/15 split
+        print(f"Training with random 70/15/15 split on all data (seed={args.seed})")
         train_random_split(config, data_manager, save_dir, device, resume_path=args.resume, ensemble_seed=args.seed)
 
 if __name__ == '__main__':

@@ -113,7 +113,10 @@ class DataManager:
         fold_name: str = "pilltypeid_nih_sidelbls0.01_metric_5folds",
         batch_size: int = 32,
         num_workers: int = 4,
-        image_size: int = 224
+        image_size: int = 224,
+        train_ratio: float = 0.7,  # Train ratio (default 70%)
+        val_ratio: float = 0.15,  # Val ratio (default 15%)
+        test_ratio: float = 0.15,  # Test ratio (default 15%)
     ):
         self.data_dir = data_dir
         self.fold_name = fold_name
@@ -125,6 +128,9 @@ class DataManager:
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.image_size = image_size
+        self.train_ratio = train_ratio
+        self.val_ratio = val_ratio
+        self.test_ratio = test_ratio
 
         # Load label encoder (build from CSV if pickle fails)
         self.label_encoder = self._load_or_build_encoder()
@@ -362,20 +368,24 @@ class DataManager:
     def get_all_data_loaders(
         self,
         augmentation: bool = True,
-        train_ratio: float = 0.8,
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.15,
+        test_ratio: float = 0.15,
         random_seed: int = 42
-    ) -> Tuple[DataLoader, DataLoader, int]:
+    ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
         """
-        Load all folds and do random train/val split.
+        Load all folds and do random train/val/test split.
         This is the recommended approach for ePillID dataset since folds don't share labels.
 
         Args:
             augmentation: Whether to apply data augmentation to training set
-            train_ratio: Ratio of training data (default 0.8 = 80%)
+            train_ratio: Ratio of training data (default 0.7 = 70%)
+            val_ratio: Ratio of validation data (default 0.15 = 15%)
+            test_ratio: Ratio of test data (default 0.15 = 15%)
             random_seed: Random seed for reproducibility
 
         Returns:
-            train_loader, val_loader: PyTorch DataLoaders, num_classes
+            train_loader, val_loader, test_loader: PyTorch DataLoaders, num_classes
         """
         from sklearn.model_selection import train_test_split
 
@@ -383,21 +393,36 @@ class DataManager:
         all_folds_df = pd.concat(self.folds, ignore_index=True)
         print(f"Loaded all folds: {len(all_folds_df)} total samples")
 
-        # Get unique labels and build encoder
-        unique_labels = sorted(all_folds_df['label'].unique())
-        label_encoder = {label: idx for idx, label in enumerate(unique_labels)}
-        num_classes = len(label_encoder)
-        print(f"Total unique classes: {num_classes}")
+        # Verify ratios sum to 1.0
+        total_ratio = train_ratio + val_ratio + test_ratio
+        if abs(total_ratio - 1.0) > 0.001:
+            raise ValueError(f"Ratios must sum to 1.0, got: {train_ratio} + {val_ratio} + {test_ratio} = {total_ratio}")
 
-        # Split into train and val (simple random split without stratify)
-        # Note: Can't use stratify because some classes have only 1 sample
-        train_df, val_df = train_test_split(
+        # First split: train_val vs test
+        train_val_ratio = train_ratio + val_ratio
+        train_val_df, test_df = train_test_split(
             all_folds_df,
-            train_size=train_ratio,
+            train_size=train_val_ratio,
             random_state=random_seed
         )
 
-        print(f"Random split: Train={len(train_df)}, Val={len(val_df)}")
+        # Second split: train vs val (from train_val_df)
+        # val_size relative to train_val_df
+        val_size_relative = val_ratio / train_val_ratio
+        train_df, val_df = train_test_split(
+            train_val_df,
+            train_size=1 - val_size_relative,
+            random_state=random_seed
+        )
+
+        print(f"Random split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+
+        # Get unique labels from train/val (not test - use only training data for encoding)
+        train_val_df = pd.concat([train_df, val_df], ignore_index=True)
+        unique_labels = sorted(train_val_df['label'].unique())
+        label_encoder = {label: idx for idx, label in enumerate(unique_labels)}
+        num_classes = len(label_encoder)
+        print(f"Total unique classes (train+val): {num_classes}")
 
         # Training transforms with aggressive augmentation to reduce overfitting
         train_transform = transforms.Compose([
@@ -435,6 +460,9 @@ class DataManager:
         if not augmentation:
             train_transform = val_transform
 
+        # Test transforms (same as validation - no augmentation)
+        test_transform = val_transform
+
         # Image directory
         image_base_dir = os.path.join(self.data_dir, "ePillID_data/classification_data/fcn_mix_weight/dc_224")
 
@@ -453,8 +481,16 @@ class DataManager:
             label_encoder=label_encoder
         )
 
+        test_dataset = PillDataset(
+            data_df=test_df,
+            image_dir=image_base_dir,
+            transform=test_transform,
+            label_encoder=label_encoder
+        )
+
         print(f"Train dataset size: {len(train_dataset)}")
         print(f"Val dataset size: {len(val_dataset)}")
+        print(f"Test dataset size: {len(test_dataset)}")
 
         # Create dataloaders
         train_loader = DataLoader(
@@ -473,33 +509,78 @@ class DataManager:
             pin_memory=True
         )
 
-        return train_loader, val_loader, num_classes
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
 
-    def get_all_class_weights(self, num_classes: int = None) -> torch.Tensor:
+        return train_loader, val_loader, test_loader, num_classes
+
+    def get_all_class_weights(
+        self,
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+        random_seed: int = 42,
+        num_classes: int = None
+    ) -> torch.Tensor:
         """
-        Calculate class weights for the entire dataset.
+        Calculate class weights for the training set.
         Use with get_all_data_loaders().
 
         Args:
+            train_ratio: Ratio of training data (should match get_all_data_loaders)
+            val_ratio: Ratio of validation data (should match get_all_data_loaders)
+            test_ratio: Ratio of test data (should match get_all_data_loaders)
+            random_seed: Random seed (should match get_all_data_loaders)
             num_classes: Number of classes (should match get_all_data_loaders result)
         """
+        from sklearn.model_selection import train_test_split
+
         # Combine all folds
         all_folds_df = pd.concat(self.folds, ignore_index=True)
 
-        # Build label encoder (same as get_all_data_loaders)
-        unique_labels = sorted(all_folds_df['label'].unique())
+        # Verify ratios
+        total_ratio = train_ratio + val_ratio + test_ratio
+        if abs(total_ratio - 1.0) > 0.001:
+            print(f"Warning: Ratios don't sum to 1.0 ({total_ratio})")
+
+        # Split the same way as get_all_data_loaders
+        train_val_ratio = train_ratio + val_ratio
+        train_val_df, _ = train_test_split(
+            all_folds_df,
+            train_size=train_val_ratio,
+            random_state=random_seed
+        )
+
+        # Second split: train vs val
+        val_size_relative = val_ratio / train_val_ratio
+        train_df, _ = train_test_split(
+            train_val_df,
+            train_size=1 - val_size_relative,
+            random_state=random_seed
+        )
+
+        # Build label encoder from TRAIN ONLY (same as get_all_data_loaders)
+        # Note: get_all_data_loaders builds from train+val, but for class weights
+        # we only need train since weights are for balancing the training set
+        unique_labels = sorted(train_df['label'].unique())
         label_encoder = {label: idx for idx, label in enumerate(unique_labels)}
         fold_num_classes = len(label_encoder)
 
+        # Use provided num_classes if available
         if num_classes is not None:
             fold_num_classes = num_classes
 
-        # Encode and count
-        all_folds_df['encoded_label'] = all_folds_df['label'].map(label_encoder)
-        label_counts = all_folds_df['encoded_label'].value_counts()
+        # Encode and count from TRAIN DATA ONLY
+        train_df['encoded_label'] = train_df['label'].map(label_encoder)
+        label_counts = train_df['encoded_label'].value_counts()
 
-        # Calculate weights (inverse frequency)
-        total_samples = len(all_folds_df)
+        # Calculate weights (inverse frequency) from TRAIN samples
+        total_samples = len(train_df)
         class_weights = []
 
         for idx in range(fold_num_classes):

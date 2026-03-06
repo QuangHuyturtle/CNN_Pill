@@ -1,6 +1,6 @@
 """
 Inference script for Pill Image Classification
-Supports single image prediction and batch processing
+Supports single image prediction, batch processing, and ensemble inference
 """
 
 import os
@@ -20,6 +20,159 @@ import pickle
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models.efficientnet_pill import create_model
+
+
+class EnsemblePillClassifier:
+    """
+    Ensemble pill image classifier for inference.
+    Loads multiple models and averages their predictions.
+
+    Args:
+        checkpoint_paths: List of paths to trained model checkpoints
+        label_encoder_path: Path to label encoder pickle file
+        device: Device to run inference on (cuda/cpu)
+        model_size: EfficientNetV2 size used during training
+    """
+
+    def __init__(
+        self,
+        checkpoint_paths: List[str],
+        label_encoder_path: str,
+        device: Optional[str] = None,
+        model_size: str = 's'
+    ):
+        # Set device
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
+        print(f"Using device: {self.device}")
+        print(f"Loading ensemble with {len(checkpoint_paths)} models...")
+
+        self.models = []
+
+        # Load all models
+        for i, checkpoint_path in enumerate(checkpoint_paths):
+            print(f"\n[{i+1}/{len(checkpoint_paths)}] Loading: {checkpoint_path}")
+
+            # Load checkpoint to get num_classes
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+            # Get num_classes from checkpoint
+            if 'num_classes' in checkpoint:
+                num_classes = checkpoint['num_classes']
+            else:
+                with open(label_encoder_path, 'rb') as f:
+                    label_encoder = pickle.load(f)
+                num_classes = len(label_encoder)
+
+            # Create model
+            model = create_model(
+                num_classes=num_classes,
+                model_size=model_size,
+                pretrained=False
+            )
+
+            # Load weights
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model = model.to(self.device)
+            model.eval()
+
+            self.models.append(model)
+
+            if 'best_acc1' in checkpoint:
+                print(f"  Val Acc1: {checkpoint['best_acc1']:.2f}%")
+
+            # Store num_classes from first model
+            if i == 0:
+                self.num_classes = num_classes
+
+        print(f"\nAll {len(self.models)} models loaded!")
+
+        # Load label encoder for inference
+        with open(label_encoder_path, 'rb') as f:
+            label_encoder = pickle.load(f)
+
+        self.idx_to_label = {v: k for k, v in label_encoder.items()}
+
+        # Image normalization (ImageNet stats)
+        self.mean = [0.485, 0.456, 0.406]
+        self.std = [0.229, 0.224, 0.225]
+        self.image_size = 224
+
+    def preprocess_image(self, image_path: str) -> torch.Tensor:
+        """
+        Preprocess an image for model input.
+
+        Args:
+            image_path: Path to image file
+
+        Returns:
+            Preprocessed tensor ready for model input
+        """
+        # Load image
+        image = Image.open(image_path).convert('RGB')
+
+        # Resize
+        image = image.resize((self.image_size, self.image_size), Image.BILINEAR)
+
+        # Convert to tensor
+        image = torch.from_numpy(np.array(image)).float() / 255.0
+        image = image.permute(2, 0, 1)  # HWC -> CHW
+
+        # Normalize
+        for i in range(3):
+            image[i] = (image[i] - self.mean[i]) / self.std[i]
+
+        # Add batch dimension
+        image = image.unsqueeze(0)
+
+        return image.to(self.device)
+
+    def predict(
+        self,
+        image_path: str,
+        top_k: int = 5
+    ) -> List[Dict[str, any]]:
+        """
+        Predict pill class from image using ensemble averaging.
+
+        Args:
+            image_path: Path to image file
+            top_k: Number of top predictions to return
+
+        Returns:
+            List of dictionaries with label, confidence, and rank
+        """
+        # Preprocess
+        image_tensor = self.preprocess_image(image_path)
+
+        # Predict with all models and average
+        with torch.no_grad():
+            all_outputs = []
+            for model in self.models:
+                outputs = model(image_tensor)
+                all_outputs.append(outputs)
+
+            # Average predictions (soft voting)
+            avg_outputs = torch.mean(torch.stack(all_outputs), dim=0)
+            probabilities = F.softmax(avg_outputs, dim=1)
+
+        # Get top-k predictions
+        probs, indices = torch.topk(probabilities, min(top_k, self.num_classes))
+
+        # Format results
+        results = []
+        for i, (idx, prob) in enumerate(zip(indices[0], probs[0])):
+            label = self.idx_to_label[idx.item()]
+            results.append({
+                'rank': i + 1,
+                'label': label,
+                'confidence': prob.item() * 100
+            })
+
+        return results
 
 
 class PillClassifier:
@@ -310,8 +463,10 @@ class PillClassifier:
 
 def main():
     parser = argparse.ArgumentParser(description='Pill Image Classification Inference')
-    parser.add_argument('--checkpoint', type=str, required=True,
-                        help='Path to model checkpoint')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Path to model checkpoint (single model)')
+    parser.add_argument('--ensemble', type=str, default=None,
+                        help='Path to ensemble checkpoint directories (comma-separated)')
     parser.add_argument('--encoder', type=str,
                         default='data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/label_encoder.pickle',
                         help='Path to label encoder pickle')
@@ -333,13 +488,42 @@ def main():
 
     args = parser.parse_args()
 
-    # Create classifier
-    classifier = PillClassifier(
-        checkpoint_path=args.checkpoint,
-        label_encoder_path=args.encoder,
-        device=args.device,
-        model_size=args.model_size
-    )
+    # Validate arguments
+    if args.ensemble is None and args.checkpoint is None:
+        print("Please specify either --checkpoint or --ensemble")
+        parser.print_help()
+        return
+
+    # Create classifier (single or ensemble)
+    if args.ensemble:
+        # Ensemble mode: load multiple models
+        checkpoint_paths = [p.strip() for p in args.ensemble.split(',')]
+        print(f"\n{'='*60}")
+        print("ENSEMBLE INFERENCE MODE")
+        print(f"{'='*60}")
+        print(f"Loading {len(checkpoint_paths)} models:")
+        for path in checkpoint_paths:
+            print(f"  - {path}")
+
+        classifier = EnsemblePillClassifier(
+            checkpoint_paths=checkpoint_paths,
+            label_encoder_path=args.encoder,
+            device=args.device,
+            model_size=args.model_size
+        )
+    else:
+        # Single model mode
+        print(f"\n{'='*60}")
+        print("SINGLE MODEL INFERENCE MODE")
+        print(f"{'='*60}")
+        print(f"Loading model: {args.checkpoint}")
+
+        classifier = PillClassifier(
+            checkpoint_path=args.checkpoint,
+            label_encoder_path=args.encoder,
+            device=args.device,
+            model_size=args.model_size
+        )
 
     # Run prediction
     if args.image:
