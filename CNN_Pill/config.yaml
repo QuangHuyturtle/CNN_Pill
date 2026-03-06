@@ -1,7 +1,7 @@
 data:
   augmentation: true
-  batch_size: 16
-  num_workers: 2
+  batch_size: 8
+  num_workers: 1
 model:
   dropout: 0.5
   dropout_head_extra: 0.25

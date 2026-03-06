@@ -7,12 +7,15 @@ import os
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 
-from inference import PillClassifier
+from inference import PillClassifier, EnsemblePillClassifier
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 app.config['UPLOAD_FOLDER'] = 'uploads'
+# Single model checkpoint path (optional, use ENSEMBLE_PATHS for ensemble)
 app.config['CHECKPOINT_PATH'] = 'checkpoints/run_20260306_103511/best_fold0.pth'
+# Ensemble checkpoint paths (comma-separated)
+app.config['ENSEMBLE_PATHS'] = None
 app.config['ENCODER_PATH'] = 'data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/label_encoder.pickle'
 
 # Create uploads folder
@@ -20,10 +23,23 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Load model once at startup
 print("Loading model...")
-classifier = PillClassifier(
-    checkpoint_path=app.config['CHECKPOINT_PATH'],
-    label_encoder_path=app.config['ENCODER_PATH']
-)
+
+# Use ensemble if paths specified, otherwise use single model
+if app.config['ENSEMBLE_PATHS']:
+    checkpoint_paths = [p.strip() for p in app.config['ENSEMBLE_PATHS'].split(',')]
+    print(f"ENSEMBLE MODE: Loading {len(checkpoint_paths)} models")
+    for path in checkpoint_paths:
+        print(f"  - {path}")
+    classifier = EnsemblePillClassifier(
+        checkpoint_paths=checkpoint_paths,
+        label_encoder_path=app.config['ENCODER_PATH']
+    )
+else:
+    print(f"SINGLE MODEL MODE: Loading {app.config['CHECKPOINT_PATH']}")
+    classifier = PillClassifier(
+        checkpoint_path=app.config['CHECKPOINT_PATH'],
+        label_encoder_path=app.config['ENCODER_PATH']
+    )
 print("Model loaded successfully!")
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'tif', 'webp'}
