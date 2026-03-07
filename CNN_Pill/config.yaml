@@ -11,14 +11,14 @@ model:
   weight_decay: 0.01
 training:
   backbone_lr_multiplier: 0.001
-  early_stopping_patience: 10
-  early_stopping_delta: 0.001
+  early_stopping_patience: 5
+  early_stopping_delta: 0.005
   label_smoothing: 0.1
   learning_rate: 0.002
   max_grad_norm: 0.5
   num_epochs: 30
   optimizer: adamw
   scheduler: cosine
-  unfreeze_epoch: 25
+  unfreeze_epoch: 999
   use_class_weights: true
   warmup_epochs: 3

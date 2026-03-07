@@ -1,7 +1,6 @@
 """
 Training script for Pill Image Classification with EfficientNetV2
 Uses random 70/15/15 split on all data (recommended for ePillID dataset)
-Supports ensemble training for improved performance
 """
 
 import os
@@ -444,7 +443,7 @@ def train_random_split(
     save_dir: str,
     device: torch.device,
     resume_path: Optional[str] = None,
-    ensemble_seed: Optional[int] = None
+    random_seed: int = 42
 ):
     """
     Train using random 70/15/15 split on all data (recommended for ePillID dataset).
@@ -455,7 +454,7 @@ def train_random_split(
         save_dir: Directory to save results
         device: Training device
         resume_path: Path to checkpoint to resume from (optional)
-        ensemble_seed: Random seed for ensemble training (optional)
+        random_seed: Random seed for data split (default: 42)
     """
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(os.path.join(save_dir, 'logs'), exist_ok=True)
@@ -467,8 +466,7 @@ def train_random_split(
     print(f"\n{'='*60}")
     print("TRAINING ON ALL DATA (Random Split)")
     print(f"{'='*60}")
-    if ensemble_seed is not None:
-        print(f"Ensemble mode - Seed: {ensemble_seed}")
+    print(f"Random seed: {random_seed}")
 
     # Get data loaders for all data with random split (70/15/15)
     train_loader, val_loader, _, num_classes = data_manager.get_all_data_loaders(
@@ -476,7 +474,7 @@ def train_random_split(
         train_ratio=0.7,
         val_ratio=0.15,
         test_ratio=0.15,
-        random_seed=42 if ensemble_seed is None else ensemble_seed
+        random_seed=random_seed
     )
 
     # Get class weights for training data (using same split as data loaders)
@@ -486,7 +484,7 @@ def train_random_split(
             train_ratio=0.7,
             val_ratio=0.15,
             test_ratio=0.15,
-            random_seed=42 if ensemble_seed is None else ensemble_seed,
+            random_seed=random_seed,
             num_classes=num_classes
         )
 
@@ -585,7 +583,7 @@ def train_random_split(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Pill Image Classifier with Ensemble Support')
+    parser = argparse.ArgumentParser(description='Train Pill Image Classifier')
     parser.add_argument('--config', type=str, default='config.yaml',
                         help='Path to config file')
     parser.add_argument('--data_dir', type=str, default='data',
@@ -594,14 +592,8 @@ def main():
                         help='Path to save checkpoints')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
-    parser.add_argument('--ensemble', action='store_true',
-                        help='Enable ensemble training (train multiple models)')
-    parser.add_argument('--num_models', type=int, default=3,
-                        help='Number of models for ensemble training (default: 3)')
-    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 123, 999],
-                        help='Random seeds for each model (default: 42 123 999)')
     parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for single model training (default: 42)')
+                        help='Random seed for training (default: 42)')
     args = parser.parse_args()
 
     # Load or create config
@@ -652,75 +644,24 @@ def main():
         num_workers=config['data']['num_workers']
     )
 
-    # Ensemble training: train multiple models with different seeds
-    if args.ensemble:
-        num_models = args.num_models
-        seeds = args.seeds[:num_models]  # Take first N seeds
-        print(f"\n{'='*60}")
-        print(f"ENSEMBLE TRAINING: {num_models} models with seeds {seeds}")
-        print(f"{'='*60}")
+    # Single model training
+    # Create save directory with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    save_dir = os.path.join(args.save_dir, f'run_{timestamp}')
 
-        ensemble_results = []
+    # Resume from checkpoint if specified
+    if args.resume:
+        if not os.path.exists(args.resume):
+            print(f"Error: Checkpoint not found: {args.resume}")
+            return
+        # Extract directory from resume path for save_dir
+        save_dir = os.path.dirname(args.resume)
+        print(f"Resuming from checkpoint: {args.resume}")
+        print(f"Saving to: {save_dir}")
 
-        for i, seed in enumerate(seeds):
-            print(f"\n{'='*60}")
-            print(f"Training Model {i+1}/{num_models} (seed={seed})")
-            print(f"{'='*60}")
-
-            # Create save directory for this model
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            model_save_dir = os.path.join(args.save_dir, f'run_{timestamp}_model{i+1}')
-            os.makedirs(model_save_dir, exist_ok=True)
-
-            # Train this model
-            train_random_split(config, data_manager, model_save_dir, device,
-                                resume_path=None, ensemble_seed=seed)
-
-            # Load results to track best model
-            results_path = os.path.join(model_save_dir, 'results.yaml')
-            if os.path.exists(results_path):
-                with open(results_path, 'r') as f:
-                    results = yaml.safe_load(f)
-                    ensemble_results.append({
-                        'model_idx': i+1,
-                        'seed': seed,
-                        'best_acc1': results.get('best_acc1', 0),
-                        'best_acc5': results.get('best_acc5', 0),
-                        'save_dir': model_save_dir
-                    })
-
-        # Print ensemble summary
-        print(f"\n{'='*60}")
-        print("ENSEMBLE TRAINING SUMMARY")
-        print(f"{'='*60}")
-        for result in ensemble_results:
-            print(f"Model {result['model_idx']} (seed={result['seed']}): "
-                  f"Val Acc1={result['best_acc1']:.2f}%, Acc5={result['best_acc5']:.2f}%")
-
-        # Find best model
-        best_model = max(ensemble_results, key=lambda x: x['best_acc1'])
-        print(f"\nBest model: Model {best_model['model_idx']} (seed={best_model['seed']})")
-        print(f"Best Val Acc1: {best_model['best_acc1']:.2f}%")
-        print(f"Use checkpoint: {best_model['save_dir']}/best_fold0.pth")
-    else:
-        # Single model training (original logic)
-        # Create save directory with timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        save_dir = os.path.join(args.save_dir, f'run_{timestamp}')
-
-        # Resume from checkpoint if specified
-        if args.resume:
-            if not os.path.exists(args.resume):
-                print(f"Error: Checkpoint not found: {args.resume}")
-                return
-            # Extract directory from resume path for save_dir
-            save_dir = os.path.dirname(args.resume)
-            print(f"Resuming from checkpoint: {args.resume}")
-            print(f"Saving to: {save_dir}")
-
-        # Train with random 70/15/15 split
-        print(f"Training with random 70/15/15 split on all data (seed={args.seed})")
-        train_random_split(config, data_manager, save_dir, device, resume_path=args.resume, ensemble_seed=args.seed)
+    # Train with random 70/15/15 split
+    print(f"Training with random 70/15/15 split on all data (seed={args.seed})")
+    train_random_split(config, data_manager, save_dir, device, resume_path=args.resume, random_seed=args.seed)
 
 if __name__ == '__main__':
     main()

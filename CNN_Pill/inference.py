@@ -51,6 +51,8 @@ class EnsemblePillClassifier:
         print(f"Loading ensemble with {len(checkpoint_paths)} models...")
 
         self.models = []
+        self.model_num_classes = []  # Store num_classes for each model
+        self.model_label_decoders = []  # Store idx_to_label for each model
 
         # Load all models
         for i, checkpoint_path in enumerate(checkpoint_paths):
@@ -80,21 +82,31 @@ class EnsemblePillClassifier:
             model.eval()
 
             self.models.append(model)
+            self.model_num_classes.append(num_classes)
+
+            # Load label encoder for this model to decode predictions
+            with open(label_encoder_path, 'rb') as f:
+                label_encoder = pickle.load(f)
+            self.model_label_decoders.append({v: k for k, v in label_encoder.items()})
 
             if 'best_acc1' in checkpoint:
                 print(f"  Val Acc1: {checkpoint['best_acc1']:.2f}%")
-
-            # Store num_classes from first model
-            if i == 0:
-                self.num_classes = num_classes
+            print(f"  Num Classes: {num_classes}")
 
         print(f"\nAll {len(self.models)} models loaded!")
 
-        # Load label encoder for inference
-        with open(label_encoder_path, 'rb') as f:
-            label_encoder = pickle.load(f)
+        # Build union of all classes across all models
+        all_classes = set()
+        for decoder in self.model_label_decoders:
+            all_classes.update(decoder.values())
+        all_classes = sorted(all_classes)
 
-        self.idx_to_label = {v: k for k, v in label_encoder.items()}
+        print(f"Total unique classes across all models: {len(all_classes)}")
+
+        # Create global label encoder (class name -> global index)
+        self.class_to_global_idx = {name: i for i, name in enumerate(all_classes)}
+        self.global_idx_to_class = {i: name for i, name in enumerate(all_classes)}
+        self.num_classes = len(all_classes)
 
         # Image normalization (ImageNet stats)
         self.mean = [0.485, 0.456, 0.406]
@@ -148,24 +160,37 @@ class EnsemblePillClassifier:
         # Preprocess
         image_tensor = self.preprocess_image(image_path)
 
-        # Predict with all models and average
+        # Predict with all models and average in global class space
         with torch.no_grad():
-            all_outputs = []
-            for model in self.models:
-                outputs = model(image_tensor)
-                all_outputs.append(outputs)
+            # Initialize global output tensor with zeros
+            global_outputs = torch.zeros(1, self.num_classes, device=self.device)
 
-            # Average predictions (soft voting)
-            avg_outputs = torch.mean(torch.stack(all_outputs), dim=0)
-            probabilities = F.softmax(avg_outputs, dim=1)
+            for i, (model, decoder, num_classes) in enumerate(
+                zip(self.models, self.model_label_decoders, self.model_num_classes)
+            ):
+                # Get model predictions
+                outputs = model(image_tensor)  # [1, num_classes]
+                probs = F.softmax(outputs, dim=1)  # [1, num_classes]
+
+                # Map predictions to global class space
+                for local_idx in range(num_classes):
+                    class_name = decoder.get(local_idx)
+                    if class_name and class_name in self.class_to_global_idx:
+                        global_idx = self.class_to_global_idx[class_name]
+                        global_outputs[0, global_idx] += probs[0, local_idx].item()
+
+                print(f"  Model {i+1}: {num_classes} classes mapped to global space")
+
+            # Average predictions
+            global_outputs = global_outputs / len(self.models)
 
         # Get top-k predictions
-        probs, indices = torch.topk(probabilities, min(top_k, self.num_classes))
+        probs, indices = torch.topk(global_outputs, min(top_k, self.num_classes))
 
         # Format results
         results = []
         for i, (idx, prob) in enumerate(zip(indices[0], probs[0])):
-            label = self.idx_to_label[idx.item()]
+            label = self.global_idx_to_class[idx.item()]
             results.append({
                 'rank': i + 1,
                 'label': label,
