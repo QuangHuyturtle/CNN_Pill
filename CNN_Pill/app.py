@@ -13,7 +13,7 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 app.config['UPLOAD_FOLDER'] = 'uploads'
 # Single model checkpoint path (optional, use ENSEMBLE_PATHS for ensemble)
-app.config['CHECKPOINT_PATH'] = 'checkpoints/run_20260306_134332_model1/best_fold0.pth'
+app.config['CHECKPOINT_PATH'] = 'checkpoints/run_20260308_083313/best_fold0.pth'
 # Ensemble checkpoint paths (comma-separated)
 app.config['ENSEMBLE_PATHS'] = None
 app.config['ENCODER_PATH'] = 'data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/label_encoder.pickle'
