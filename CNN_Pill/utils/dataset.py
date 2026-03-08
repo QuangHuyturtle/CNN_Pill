@@ -65,12 +65,16 @@ class PillDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         row = self.data_df.iloc[idx]
 
-        # Get image filename from 'images' column (the actual filename)
-        # CSV structure: 'images' column has filename like '0.jpg', '100.jpg'
-        filename = row['images']
+        # Get image path - check if 'image_path' column exists (full dataset)
+        # or use 'images' column (filename only) for fold CSVs
+        if 'image_path' in row:
+            img_path = os.path.join(self.image_dir, row['image_path'])
+        else:
+            # CSV structure: 'images' column has filename like '0.jpg', '100.jpg'
+            filename = row['images']
+            img_path = os.path.join(self.image_dir, filename)
 
         # Load image
-        img_path = os.path.join(self.image_dir, filename)
         image = self._load_image(img_path)
 
         # Apply transforms
@@ -184,7 +188,14 @@ class DataManager:
         return encoder
 
     def _load_folds(self) -> List[pd.DataFrame]:
-        """Load all 5 fold CSV files."""
+        """Load all 5 fold CSV files OR load from all_labels.csv if not available."""
+        # First try to load all_labels.csv for full dataset
+        all_labels_path = os.path.join(self.data_dir, "all_labels.csv")
+        if os.path.exists(all_labels_path):
+            print(f"Loading from {all_labels_path}")
+            return [pd.read_csv(all_labels_path)]
+
+        # Fallback: Load fold CSV files
         folds = []
         for i in range(5):
             fold_path = os.path.join(self.fold_dir, f"{self.fold_name}_{i}.csv")
@@ -374,8 +385,8 @@ class DataManager:
         random_seed: int = 42
     ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
         """
-        Load all folds and do random train/val/test split.
-        This is the recommended approach for ePillID dataset since folds don't share labels.
+        Load all data and do random train/val/test split.
+        Uses all_labels.csv to get full dataset with correct image paths.
 
         Args:
             augmentation: Whether to apply data augmentation to training set
@@ -389,9 +400,16 @@ class DataManager:
         """
         from sklearn.model_selection import train_test_split
 
-        # Combine all folds
-        all_folds_df = pd.concat(self.folds, ignore_index=True)
-        print(f"Loaded all folds: {len(all_folds_df)} total samples")
+        # Check if using all_labels.csv (full dataset) or fold CSVs
+        all_labels_path = os.path.join(self.data_dir, "all_labels.csv")
+        if os.path.exists(all_labels_path):
+            print(f"Using full dataset from {all_labels_path}")
+            all_df = pd.read_csv(all_labels_path)
+        else:
+            print(f"Using fold CSV files")
+            all_df = pd.concat(self.folds, ignore_index=True)
+
+        print(f"Loaded all data: {len(all_df)} total samples")
 
         # Verify ratios sum to 1.0
         total_ratio = train_ratio + val_ratio + test_ratio
@@ -401,7 +419,7 @@ class DataManager:
         # First split: train_val vs test
         train_val_ratio = train_ratio + val_ratio
         train_val_df, test_df = train_test_split(
-            all_folds_df,
+            all_df,
             train_size=train_val_ratio,
             random_state=random_seed
         )
@@ -463,8 +481,8 @@ class DataManager:
         # Test transforms (same as validation - no augmentation)
         test_transform = val_transform
 
-        # Image directory
-        image_base_dir = os.path.join(self.data_dir, "ePillID_data/classification_data/fcn_mix_weight/dc_224")
+        # Use data_dir as base directory (all_labels.csv has relative paths)
+        image_base_dir = self.data_dir
 
         # Create datasets
         train_dataset = PillDataset(
