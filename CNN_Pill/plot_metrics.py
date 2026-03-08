@@ -207,7 +207,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Plot training metrics from TensorBoard logs')
     parser.add_argument('--log_dir', type=str,
-                        default='checkpoints/run_20260125_065908/logs/train',
+                        default='checkpoints/run_20260308_083313/logs/train',
                         help='Path to TensorBoard log directory')
     parser.add_argument('--save', type=str, default=None,
                         help='Base path to save figures (e.g., training_curves)')

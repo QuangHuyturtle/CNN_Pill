@@ -40,8 +40,12 @@ class PillDataset(Dataset):
         # Filter out rows where image file doesn't exist
         valid_rows = []
         for _, row in data_df.iterrows():
-            filename = row['images']
-            img_path = os.path.join(image_dir, filename)
+            # Use image_path if available (full path), otherwise use images column
+            if 'image_path' in row and row['image_path']:
+                img_path = os.path.join(image_dir, row['image_path'])
+            else:
+                filename = row['images']
+                img_path = os.path.join(image_dir, filename)
             if os.path.exists(img_path):
                 valid_rows.append(row)
 
@@ -385,8 +389,8 @@ class DataManager:
         random_seed: int = 42
     ) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
         """
-        Load all data and do random train/val/test split.
-        Uses all_labels.csv to get full dataset with correct image paths.
+        Load all data from dc_224 and dr_224 folders and do random train/val/test split.
+        Uses all_labels.csv to get labels for each image.
 
         Args:
             augmentation: Whether to apply data augmentation to training set
@@ -400,16 +404,50 @@ class DataManager:
         """
         from sklearn.model_selection import train_test_split
 
-        # Check if using all_labels.csv (full dataset) or fold CSVs
+        # Load all_labels.csv to get label mapping
         all_labels_path = os.path.join(self.data_dir, "all_labels.csv")
         if os.path.exists(all_labels_path):
-            print(f"Using full dataset from {all_labels_path}")
-            all_df = pd.read_csv(all_labels_path)
+            print(f"Loading labels from {all_labels_path}")
+            label_df = pd.read_csv(all_labels_path)
+            # Create filename -> label mapping
+            filename_to_label = dict(zip(label_df['images'], label_df['label']))
+            print(f"Loaded {len(filename_to_label)} label mappings from CSV")
         else:
-            print(f"Using fold CSV files")
-            all_df = pd.concat(self.folds, ignore_index=True)
+            print("Warning: all_labels.csv not found, cannot load labels!")
+            filename_to_label = {}
 
-        print(f"Loaded all data: {len(all_df)} total samples")
+        # Scan both dc_224 and dr_224 folders for all images
+        base_dir = os.path.join(self.data_dir, "classification_data", "fcn_mix_weight")
+        dc_dir = os.path.join(base_dir, "dc_224")
+        dr_dir = os.path.join(base_dir, "dr_224")
+
+        # Collect all valid images with labels
+        all_data = []
+
+        # Scan dc_224 folder
+        if os.path.exists(dc_dir):
+            for filename in os.listdir(dc_dir):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif')):
+                    if filename in filename_to_label:
+                        all_data.append({
+                            'images': filename,
+                            'image_path': f'fcn_mix_weight/dc_224/{filename}',
+                            'label': filename_to_label[filename]
+                        })
+
+        # Scan dr_224 folder
+        if os.path.exists(dr_dir):
+            for filename in os.listdir(dr_dir):
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif')):
+                    if filename in filename_to_label:
+                        all_data.append({
+                            'images': filename,
+                            'image_path': f'fcn_mix_weight/dr_224/{filename}',
+                            'label': filename_to_label[filename]
+                        })
+
+        all_df = pd.DataFrame(all_data)
+        print(f"Loaded all data: {len(all_df)} total samples from both folders")
 
         # Verify ratios sum to 1.0
         total_ratio = train_ratio + val_ratio + test_ratio
@@ -481,8 +519,8 @@ class DataManager:
         # Test transforms (same as validation - no augmentation)
         test_transform = val_transform
 
-        # Use data_dir as base directory (all_labels.csv has relative paths)
-        image_base_dir = self.data_dir
+        # Use data_dir/classification_data as base directory (all_labels.csv has paths for fc_mix_weight)
+        image_base_dir = os.path.join(self.data_dir, "classification_data")
 
         # Create datasets
         train_dataset = PillDataset(
