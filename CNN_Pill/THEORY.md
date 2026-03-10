@@ -12,6 +12,7 @@
 8. [Loss Function & Optimization](#8-loss-function--optimization)
 9. [Evaluation Metrics](#9-evaluation-metrics)
 10. [Resume Training & Checkpoint Management](#10-resume-training--checkpoint-management)
+11. [Early Stopping](#11-early-stopping)
 
 ---
 
@@ -168,7 +169,7 @@ Thay thế Depthwise + Projection bằng một Conv lớn:
 - Tăng tốc độ training
 - Giảm memory access
 
-### 3.6 EfficientNetV2-S Architecture
+### 3.6 EfficientNetV2-S Architecture (sử dụng trong dự án)
 
 ```
 Input: 224 × 224 × 3
@@ -194,6 +195,33 @@ Head: Conv1×1, 1280 channels
 Pooling + Classifier
     ↓
 Output: 960 classes
+```
+
+### 3.7 Implementation trong dự án
+
+Mô hình sử dụng thư viện **timm** (PyTorch Image Models) để load EfficientNetV2-S:
+
+```python
+# Từ efficientnet_pill.py
+self.backbone = timm.create_model(
+    model_name='tf_efficientnetv2_s',
+    pretrained=True,
+    num_classes=0,  # Remove classification head
+    global_pool='avg'  # Global average pooling
+)
+```
+
+**Classifier Head tùy chỉnh:**
+
+```python
+self.classifier = nn.Sequential(
+    nn.Dropout(p=dropout_rate),      # 0.5
+    nn.Linear(self.feature_dim, 512),
+    nn.BatchNorm1d(512),
+    nn.ReLU(inplace=True),
+    nn.Dropout(p=dropout_head_extra), # 0.25
+    nn.Linear(512, num_classes)      # num_classes = 960
+)
 ```
 
 ---
@@ -234,21 +262,28 @@ Head (trainable): Update weights
 
 **Strategy 2: Unfreeze + Lower LR**
 ```
-Backbone: LR = 0.0001 (slow update)
-Head: LR = 0.001 (fast update)
+Backbone: LR = 0.002 × 0.001 = 0.000002 (slow update)
+Head: LR = 0.002 (fast update)
 ```
 
-### 4.4 Two-Phase Training trong dự án
+### 4.4 Training Strategy trong dự án
 
-**Phase 1 (Epoch 0-9):**
+**Config mặc định:**
+```yaml
+training:
+  unfreeze_epoch: 999  # Không unfreeze backbone
+```
+
+**Phase 1 (Epoch 0 - unfreeze_epoch-1):**
 - Freeze EfficientNetV2 backbone
 - Chỉ train classifier head
+- Learning rate: 0.002
 - Mục đích: Head học cách phân loại với features có sẵn
 
-**Phase 2 (Epoch 10+):**
-- Unfreeze toàn bộ
-- Backbone LR × 0.1
-- Mục đích: Fine-tune features cho bài toán thuốc
+**Phase 2 (Epoch unfreeze_epoch+):**
+- Nếu `unfreeze_epoch < num_epochs`, unfreeze toàn bộ
+- Backbone LR: 0.002 × backbone_lr_multiplier (mặc định 0.001)
+- Fine-tune toàn bộ mạng
 
 ---
 
@@ -335,6 +370,8 @@ Calculate Loss
     ↓
 Backpropagation
     ↓
+Gradient Clipping (max_grad_norm = 0.5)
+    ↓
 Update weights (Optimizer)
 ```
 
@@ -343,17 +380,14 @@ Update weights (Optimizer)
 ```
 Input: x (Batch, 3, 224, 224)
     ↓
-EfficientNetV2 Backbone
-    Output: features (Batch, 1280, 7, 7)
-    ↓
-Global Average Pooling
-    Output: pooled (Batch, 1280)
+EfficientNetV2 Backbone (from timm)
+    Output: features (Batch, 1280)
     ↓
 Classifier Head
-    - Dropout(0.3)
+    - Dropout(0.5)
     - Linear(1280 → 512)
-    - BatchNorm + ReLU
-    - Dropout(0.15)
+    - BatchNorm1d + ReLU
+    - Dropout(0.25)
     - Linear(512 → 960)
     ↓
 Output: logits (Batch, 960)
@@ -369,7 +403,9 @@ Loss = CrossEntropy(y_pred, y_true)
     ↓
 ∂Loss/∂Weights (Gradient)
     ↓
-Optimizer Update:
+Gradient Clipping (max_norm = 0.5)
+    ↓
+Optimizer Update (AdamW):
     weights = weights - lr × gradient
     ↓
 New Weights
@@ -379,21 +415,49 @@ New Weights
 
 **Đường dẫn ảnh trong dataset:**
 ```
-data/ePillID_data/classification_data/fcn_mix_weight/dc_224/
-├── 0.jpg
-├── 1.jpg
-├── 2.jpg
-└── ...
+data/classification_data/fcn_mix_weight/
+├── dc_224/          # Cropped images (224x224)
+│   ├── 0.jpg
+│   ├── 1.jpg
+│   └── ...
+└── dr_224/          # Reflected images (224x224)
+    ├── 100.jpg
+    ├── 101.jpg
+    └── ...
 ```
 
-**Đường dẫn CSV folds:**
+**Đường dẫn CSV labels:**
+```
+data/
+└── all_labels.csv        # Mapping filename -> NDC label
+```
+
+**Đường dẫn label encoder:**
 ```
 data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/
-├── pilltypeid_..._0.csv
-├── pilltypeid_..._1.csv
-├── ...
 └── label_encoder.pickle
 ```
+
+### 6.5 Data Split Strategy
+
+Dự án sử dụng **Random Split** thay vì K-Fold Cross-Validation:
+
+```
+Total Dataset (3,728 images)
+    ↓
+Random Split (seed=42):
+    ↓
+┌─────────────────────────────────┐
+│ Train: 70% (2,610 images)    │
+│ Validation: 15% (559 images)  │
+│ Test: 15% (559 images)        │
+└─────────────────────────────────┘
+```
+
+**Lợi ích của Random Split:**
+- Sử dụng toàn bộ dữ liệu hiệu quả hơn
+- Đơn giản hơn K-Fold
+- Khuyến nghị cho dataset ePillID
 
 ---
 
@@ -406,7 +470,7 @@ Tăng diversity của training data để:
 - Mô hình học invariant features
 - Mô hình generalize tốt hơn
 
-### 7.2 Các kỹ thuật sử dụng
+### 7.2 Các kỹ thuật sử dụng (Dataset Module)
 
 **1. Random Horizontal Flip (p=0.5)**
 ```
@@ -419,26 +483,49 @@ Flipped:  [ ][ ][ ]
          [ ][ ][ ]
 ```
 
-**2. Random Rotation (±15°)**
+**2. Random Vertical Flip (p=0.3)**
 ```
-    [P][I][L]        [ ][P][ ]
-    [L][L][I]   →   [I][L][ ]
-    [ ][ ][ ]        [L][I][ ]
+Lật ngược ảnh theo chiều dọc
 ```
 
-**3. Random Translation (±10%)**
+**3. Random Rotation (±30°)**
 ```
-Shift left, right, up, down randomly
-```
-
-**4. Color Jitter**
-```
-brightness:  ±0.2
-contrast:    ±0.2
-saturation:  ±0.2
+Xoay ảnh ngẫu nhiên trong khoảng ±30 độ
 ```
 
-**5. Normalization**
+**4. Random Affine**
+```
+- Translate: ±15% (dịch chuyển)
+- Scale: 0.85-1.15 (thu phóng)
+- Shear: 5° (lệch)
+```
+
+**5. Random Resized Crop**
+```
+- Scale: 0.7-1.0 (kích thước random)
+- Resize về 224x224
+```
+
+**6. Color Jitter**
+```
+brightness:  ±0.3
+contrast:    ±0.3
+saturation:  ±0.3
+hue:         ±0.1
+```
+
+**7. Random Grayscale (p=0.1)**
+```
+Chuyển sang grayscale với xác suất 10%
+```
+
+**8. Gaussian Blur**
+```
+kernel_size: 3
+sigma: 0.1-2.0
+```
+
+**9. Normalization**
 ```
 mean = [0.485, 0.456, 0.406]  # ImageNet mean
 std  = [0.229, 0.224, 0.225]  # ImageNet std
@@ -450,11 +537,16 @@ normalized = (image - mean) / std
 
 | Transform | Train | Val/Test |
 |-----------|-------|----------|
-| Resize | ✓ | ✓ |
-| Flip | ✓ | ✗ |
-| Rotate | ✓ | ✗ |
-| Translate | ✓ | ✗ |
+| Resize (110%) | ✓ | ✗ |
+| Horizontal Flip | ✓ | ✗ |
+| Vertical Flip | ✓ | ✗ |
+| Rotation (±30°) | ✓ | ✗ |
+| Random Affine | ✓ | ✗ |
+| Random Resized Crop | ✓ | ✗ |
 | Color Jitter | ✓ | ✗ |
+| Random Grayscale | ✓ | ✗ |
+| Gaussian Blur | ✓ | ✗ |
+| Resize (224x224) | ✗ | ✓ |
 | Normalize | ✓ | ✓ |
 
 ---
@@ -487,7 +579,7 @@ L = -log(ŷ_true_class)
 y_smooth = (1 - α) × y_one_hot + α × K
 
 Where:
-- α = 0.1 (smoothing factor)
+- α = 0.1 (smoothing factor trong config)
 - K = số classes
 ```
 
@@ -529,7 +621,7 @@ v_t = β₂×v_{t-1} + (1-β₂)×g_t²
 ```
 
 **Hyperparameters:**
-- Learning rate (α): 0.001
+- Learning rate (α): 0.002
 - β₁: 0.9
 - β₂: 0.999
 - Weight decay (λ): 0.01
@@ -563,6 +655,7 @@ if ||gradient|| > max_norm:
 ```
 
 **Mục đích:** Tránh exploding gradient
+**Config:** `max_grad_norm = 0.5`
 
 ---
 
@@ -580,32 +673,7 @@ if ||gradient|| > max_norm:
 % correct predictions where true class is in top 5 predictions
 ```
 
-### 9.2 Confusion Matrix
-
-```
-              Predicted
-           A   B   C   D
-        A[10   0   1   0]
-True   B[ 1  15   0   0]
-       C[ 0   0  20   2]
-       D[ 1   0   0  12]
-```
-
-### 9.3 Precision, Recall, F1
-
-**Per-class metrics:**
-```
-Precision = TP / (TP + FP)
-Recall = TP / (TP + FN)
-F1 = 2 × (Precision × Recall) / (Precision + Recall)
-```
-
-**Macro-average:**
-```
-F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
-```
-
-### 9.4 Kết quả dự án
+### 9.2 Kết quả dự án
 
 | Metric | Giá trị |
 |--------|---------|
@@ -637,7 +705,7 @@ F1_macro = mean(F1_class_1, F1_class_2, ..., F1_class_K)
 ```python
 checkpoint = {
     'epoch': epoch,                              # Epoch hiện tại
-    'model_state_dict': model.state_dict(),      # Model weights
+    'model_state_dict': model.state_dict(),          # Model weights
     'optimizer_state_dict': optimizer.state_dict(),  # Optimizer state
     'best_acc1': best_acc1,                      # Best Top-1 accuracy
     'best_acc5': best_acc5,                      # Best Top-5 accuracy
@@ -646,73 +714,45 @@ checkpoint = {
 }
 ```
 
-### 10.3 Tại sao cần Resume Training?
-
-**Các tình huống cần resume:**
-1. **Mất điện / System crash:** Training bị gián đoạn giữa chừng
-2. **Out of memory:** GPU không đủ memory
-3. **Manual stop:** Cần dừng training để kiểm tra
-4. **Hyperparameter tuning:** Thay đổi LR và train tiếp
-5. **Long training:** Training nhiều ngày, cần checkpoint định kỳ
-
-### 10.4 Cách Resume Training hoạt động
+### 10.3 Cách Resume Training hoạt động
 
 ```
 Training Process:
 ┌─────────────────────────────────────────────┐
-│ Epoch 0-15: Training                        │
+│ Epoch 0-10: Training                        │
 │     ↓                                        │
 │  Crash / Stop                                │
 │     ↓                                        │
-│  Save checkpoint at epoch 15                 │
+│  Save checkpoint at epoch 10                 │
 │     ↓                                        │
 │  Resume from checkpoint                      │
 │     ↓                                        │
 │  Load: model weights, optimizer state        │
 │     ↓                                        │
-│  Continue from epoch 16                      │
+│  Continue from epoch 11                      │
 │     ↓                                        │
 │  Train to completion                         │
 └─────────────────────────────────────────────┘
 ```
 
-### 10.5 Implementation Details
+### 10.4 Cách sử dụng
 
-**Bước 1: Lưu checkpoint**
-```python
-# Lưu best model
-if val_acc1 > self.best_acc1:
-    self.best_acc1 = val_acc1
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': self.model.state_dict(),
-        'optimizer_state_dict': self.optimizer.state_dict(),
-        'best_acc1': self.best_acc1,
-        'best_acc5': self.best_acc5,
-    }
-    torch.save(checkpoint, 'best_model.pth')
+```bash
+# Resume từ best model
+python3 train.py --resume checkpoints/run_XXX/best_fold0.pth
+
+# Resume từ checkpoint epoch cụ thể
+python3 train.py --resume checkpoints/run_XXX/checkpoint_fold0_epoch15.pth
 ```
 
-**Bước 2: Load checkpoint & Resume**
-```python
-# Load checkpoint
-checkpoint = torch.load('best_model.pth', map_location=device)
+**Chức năng resume sẽ:**
+1. Load model state dict
+2. Load optimizer state dict
+3. Khôi phục epoch, best_acc1, best_acc5
+4. Tiếp tục training từ epoch + 1
+5. Giữ nguyên best accuracy đã đạt được
 
-# Restore model
-model.load_state_dict(checkpoint['model_state_dict'])
-
-# Restore optimizer
-optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-# Get start epoch
-start_epoch = checkpoint['epoch'] + 1
-
-# Continue training
-for epoch in range(start_epoch, num_epochs):
-    train_one_epoch(epoch)
-```
-
-### 10.6 TensorBoard Logging
+### 10.5 TensorBoard Logging
 
 **TensorBoard** là công cụ visualize training progress:
 
@@ -720,7 +760,6 @@ for epoch in range(start_epoch, num_epochs):
 - **Loss:** Train và validation loss mỗi epoch
 - **Accuracy:** Top-1 và Top-5 accuracy
 - **Learning Rate:** LR hiện tại
-- **Gradients:** Gradient norms (cho debugging)
 
 **Cách sử dụng:**
 ```bash
@@ -731,46 +770,85 @@ tensorboard --logdir checkpoints/run_XXX/logs
 http://localhost:6006
 ```
 
-**Các graph hiển thị:**
-1. **Scalars:** Loss, Accuracy, LR qua thời gian
-2. **Histograms:** Weight distribution
-3. **Graphs:** Model architecture
+### 10.6 Plot Training Metrics
 
-### 10.7 Quản lý checkpoints
+**plot_metrics.py** vẽ 2 biểu đồ:
 
-**Cấu trúc directory:**
+1. **Train Loss over Epochs**
+   - Trục X: Epoch
+   - Trục Y: Loss
+   - Annotation: Final loss và Best loss
+
+2. **Accuracy Comparison**
+   - Trục X: Epoch
+   - Trục Y: Accuracy (%)
+   - 3 đường: Train, Validation, Test (nếu có)
+   - Annotation: Best validation accuracy
+
+**Cách sử dụng:**
+```bash
+python3 plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --save curves
 ```
-checkpoints/
-└── run_20260125_065908/
-    ├── best_fold0.pth              # Best model
-    ├── checkpoint_fold0_epoch10.pth # Checkpoint epoch 10
-    ├── checkpoint_fold0_epoch20.pth # Checkpoint epoch 20
-    ├── config.yaml                 # Config đã dùng
-    └── logs/
-        └── train/
-            └── events.out.tfevents...
+
+---
+
+## 11. Early Stopping
+
+### 11.1 Early Stopping là gì?
+
+**Early Stopping** là kỹ thuật tự động dừng training khi model không còn cải thiện, giúp:
+- Tránh overfitting
+- Tiết kiệm thời gian training
+- Giảm sử dụng tài nguyên
+
+### 11.2 Cách hoạt động
+
+```
+┌─────────────────────────────────────────────────┐
+│ Validation Accuracy                           │
+│                                          ╱│
+│                                       ╱    │
+│                                    ╱       │  ↑
+│                                ╱          │  │ Best
+│                             ╱             │  │
+│                          ╱                │  │
+│  ___________╱_______________________       │  ↓
+│                                        └───┤ Epoch
+│                                           │
+│                                           │
+│  Early Stop patience=5                       │
+│  (dừng sau 5 epochs không cải thiện)        │
+└─────────────────────────────────────────────────┘
 ```
 
-**Best practices:**
-1. **Lưu checkpoint định kỳ:** Mỗi 10 epoch
-2. **Lưu best model:** Khi val accuracy cải thiện
-3. **Dọn dẹp cũ:** Xóa checkpoints cũ để tiết kiệm disk
-4. **Backup quan trọng:** Copy best model đến location khác
+### 11.3 Config trong dự án
 
-### 10.8 TensorFlow Warning Suppression
+```yaml
+training:
+  early_stopping_patience: 5      # Số epoch chờ
+  early_stopping_delta: 0.005     # Cải thiện tối thiểu
+  mode: 'max'                    # Tối đa hóa accuracy
+```
 
-**Vấn đề:** TensorFlow warnings hiển thị khi training PyTorch model
+### 11.4 Logic
 
-**Giải pháp:** Set environment variables trong `train.py`:
 ```python
-import os
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+# Từ train.py - EarlyStopping class
+if score > best_score + min_delta:
+    best_score = score
+    counter = 0
+else:
+    counter += 1
+
+if counter >= patience:
+    early_stop = True
+    break
 ```
 
-**Các warnings bị tắt:**
-- oneDNN custom operations warning
-- TensorFlow info messages
+**Quy tắc:**
+- Nếu val_acc > best_acc + 0.005: Reset counter
+- Ngược lại: Tăng counter
+- Nếu counter >= 5: Dừng training
 
 ---
 
@@ -782,18 +860,21 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 4. **ImageNet:** Deng et al., "ImageNet: A large-scale hierarchical image database", 2009
 5. **ePillID:** Uddin et al., "ePillID: A Benchmark for Pill Identification using Deep Learning", 2021
 6. **PyTorch Checkpointing:** PyTorch Documentation, "Saving and Loading Models"
+7. **timm:** Ross Wightman, "PyTorch Image Models (timm)", GitHub
 
 ---
 
 ## Tóm tắt
 
-Dự án sử dụng **EfficientNetV2-S** với **Transfer Learning** từ ImageNet để phân loại **960 loại thuốc** dựa trên hình ảnh. Mô hình được train với **Two-Phase strategy**, **Data Augmentation**, **Label Smoothing**, và **Class Weights** để đạt được **Top-1 Accuracy ~23.46%** - một kết quả tốt cho bài toán khó với ít dữ liệu.
+Dự án sử dụng **EfficientNetV2-S** (từ thư viện **timm**) với **Transfer Learning** từ ImageNet để phân loại **960 loại thuốc** dựa trên hình ảnh. Mô hình được train với **Two-Phase strategy**, **Aggressive Data Augmentation**, **Label Smoothing**, và **Class Weights** để đạt được **Top-1 Accuracy ~23.46%** - một kết quả tốt cho bài toán khó với ít dữ liệu.
 
 **Các tính năng kỹ thuật:**
 - **Resume Training:** Tiếp tục training từ checkpoint khi bị gián đoạn
+- **Early Stopping:** Tự động dừng khi không cải thiện
+- **Gradient Clipping:** Tránh exploding gradient
 - **Checkpoint Management:** Lưu best model và periodic checkpoints
 - **TensorBoard Integration:** Visualize training progress
-- **Warning Suppression:** Tắt TensorFlow warnings không cần thiết
+- **Plot Metrics:** Vẽ biểu đồ training curves
 
 **Key takeaways:**
 - CNN học features hierarchically (low → high level)
@@ -801,4 +882,4 @@ Dự án sử dụng **EfficientNetV2-S** với **Transfer Learning** từ Image
 - EfficientNetV2 balance giữa accuracy, speed, size
 - NDC code là standard cho identification thuốc
 - Data augmentation và regularization quan trọng cho small dataset
-- Resume training giúp không mất progress khi training bị gián đoạn
+- Early stopping giúp tránh overfitting và tiết kiệm thời gian

@@ -14,7 +14,9 @@ Phân loại viên thuốc từ hình ảnh sử dụng EfficientNetV2-S với T
 - Hỗ trợ batch inference cho nhiều hình ảnh
 - Visualization kết quả dự đoán
 - **Resume training từ checkpoint** - Tiếp tục huấn luyện khi bị gián đoạn
-- **TensorFlow warning suppression** - Tắt thông báo không cần thiết
+- **Early Stopping** - Tự động dừng training khi không cải thiện
+- **TensorBoard Integration** - Visualize training progress
+- **Plot Training Metrics** - Vẽ biểu đồ training curves
 
 ### Cấu trúc dự án
 
@@ -28,9 +30,10 @@ CNN_Pill/
 │   └── dataset.py                       # Dataset class và DataLoader
 ├── data/                                # Dữ liệu dataset
 │   ├── all_labels.csv                   # Metadata toàn bộ dataset
-│   └── ePillID_data/                    # Đường dẫn dữ liệu đúng
-│       └── classification_data/
-│           └── fcn_mix_weight/dc_224/  # Hình ảnh (224x224)
+│   └── classification_data/              # Đường dẫn dữ liệu đúng
+│       └── fcn_mix_weight/
+│           ├── dc_224/                 # Hình ảnh cropped (224x224)
+│           └── dr_224/                 # Hình ảnh reflected (224x224)
 ├── data/folds/                          # Fold cross-validation
 │   └── pilltypeid_nih_sidelbls0.01_metric_5folds/
 │       ├── label_encoder.pickle         # Label encoder
@@ -66,8 +69,8 @@ CNN_Pill/
 - **Số lớp:** 960 loại thuốc (NDC codes)
 - **Số lượng ảnh:** ~3,728 hình ảnh
 - **Kích thước ảnh:** 224 x 224 pixels
-- **Chia dữ liệu:** 80% train / 20% validation (random split)
-- **Đường dẫn ảnh:** `ePillID_data/classification_data/fcn_mix_weight/dc_224/`
+- **Chia dữ liệu:** 70% train / 15% validation / 15% test (random split)
+- **Đường dẫn ảnh:** `classification_data/fcn_mix_weight/dc_224/` và `dr_224/`
 
 ### NDC Code Format
 
@@ -90,9 +93,12 @@ Ví dụ: 00591-5307-01_BE305F72
 ### Yêu cầu hệ thống
 
 - Python 3.8+
-- CUDA 11.0+ (khuyến nghị nếu có GPU)
+- **GPU (một trong các loại sau):**
+  - CUDA 11.0+ (cho NVIDIA GPU, khuyến nghị)
+  - MPS (cho Apple Silicon M1/M2/M3)
+  - Hoặc CPU (sẽ chậm hơn)
 - 8GB+ RAM
-- 4GB+ VRAM (nếu dùng GPU)
+- 4GB+ VRAM (nếu dùng GPU NVIDIA) / Unified Memory (Apple Silicon)
 
 ### Cài đặt dependencies
 
@@ -151,25 +157,25 @@ Web app sẽ chạy tại: **http://localhost:5000**
 
 ```bash
 cd CNN_Pill
-python train.py
+python3 train.py
 ```
 
 #### Huấn luyện với config tùy chỉnh
 
 ```bash
-python train.py --config my_config.yaml
+python3 train.py --config my_config.yaml
 ```
 
-#### Resume training từ checkpoint (TÍNH NĂNG MỚI)
+#### Resume training từ checkpoint
 
 Khi training bị gián đoạn (mất điện, crash, etc.), bạn có thể tiếp tục từ checkpoint đã lưu:
 
 ```bash
 # Resume từ best model
-python train.py --resume checkpoints/run_20260125_065908/best_fold0.pth
+python3 train.py --resume checkpoints/run_20260308_083313/best_fold0.pth
 
 # Resume từ checkpoint epoch cụ thể
-python train.py --resume checkpoints/run_20260125_065908/checkpoint_fold0_epoch15.pth
+python3 train.py --resume checkpoints/run_20260308_083313/checkpoint_fold0_epoch15.pth
 ```
 
 **Chức năng resume sẽ:**
@@ -181,13 +187,14 @@ python train.py --resume checkpoints/run_20260125_065908/checkpoint_fold0_epoch1
 #### Các tham số command line
 
 ```bash
-python train.py [OPTIONS]
+python3 train.py [OPTIONS]
 
 Options:
   --config PATH    Path to config file (default: config.yaml)
   --data_dir PATH  Path to dataset directory (default: data)
   --save_dir PATH  Path to save checkpoints (default: checkpoints)
   --resume PATH    Path to checkpoint to resume from (optional)
+  --seed INT       Random seed for training (default: 42)
 ```
 
 ---
@@ -199,26 +206,30 @@ model:
   # Model size: 's' (small), 'm' (medium), 'l' (large)
   size: 's'
   pretrained: true
-  dropout: 0.3
-  freeze_backbone: true
+  dropout: 0.5                # Dropout probability cho lớp đầu tiên
+  dropout_head_extra: 0.25     # Dropout probability cho lớp thứ hai
+  freeze_backbone: true         # Freeze backbone trong giai đoạn đầu
+  weight_decay: 0.01
 
 data:
   data_dir: "data"
-  batch_size: 32
-  num_workers: 0           # Set = 0 cho Windows
+  batch_size: 8                # Batch size (giảm nếu OOM)
+  num_workers: 1               # Number of DataLoader workers (0 cho Windows)
   augmentation: true
 
 training:
-  num_epochs: 50
-  learning_rate: 0.001
-  optimizer: 'adamw'
-  scheduler: 'cosine'
-  backbone_lr_multiplier: 0.1
-  warmup_epochs: 5
-  unfreeze_epoch: 10
-  use_class_weights: true
-  label_smoothing: 0.1
-  gradient_clip: 1.0
+  num_epochs: 25               # Số epoch tối đa
+  learning_rate: 0.002         # Learning rate ban đầu
+  optimizer: 'adamw'          # Optimizer type
+  scheduler: 'cosine'         # Learning rate scheduler
+  backbone_lr_multiplier: 0.001 # LR multiplier cho backbone
+  warmup_epochs: 3            # Warmup epochs
+  unfreeze_epoch: 999          # Epoch để unfreeze backbone (999 = không unfreeze)
+  use_class_weights: true       # Sử dụng class weights cho imbalanced dataset
+  label_smoothing: 0.1         # Label smoothing factor
+  max_grad_norm: 0.5           # Gradient clipping max norm
+  early_stopping_patience: 5    # Số epoch chờ trước khi dừng
+  early_stopping_delta: 0.005   # Cải thiện tối thiểu để reset counter
 ```
 
 ---
@@ -228,8 +239,8 @@ training:
 #### Dự đoán một hình ảnh
 
 ```bash
-python inference.py \
-    --checkpoint checkpoints/best_fold0.pth \
+python3 inference.py \
+    --checkpoint checkpoints/run_XXX/best_fold0.pth \
     --encoder data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/label_encoder.pickle \
     --image path/to/pill.jpg
 ```
@@ -237,8 +248,8 @@ python inference.py \
 #### Dự đoán hàng loạt (batch)
 
 ```bash
-python inference.py \
-    --checkpoint checkpoints/best_fold0.pth \
+python3 inference.py \
+    --checkpoint checkpoints/run_XXX/best_fold0.pth \
     --directory path/to/images/ \
     --output results.csv \
     --top_k 5
@@ -247,8 +258,8 @@ python inference.py \
 #### Tạo visualization
 
 ```bash
-python inference.py \
-    --checkpoint checkpoints/best_fold0.pth \
+python3 inference.py \
+    --checkpoint checkpoints/run_XXX/best_fold0.pth \
     --image pill.jpg \
     --visualize \
     --output pill_pred.jpg
@@ -261,34 +272,41 @@ python inference.py \
 ```
 Input Image (3, 224, 224)
     ↓
-EfficientNetV2-S Backbone (pretrained on ImageNet)
+EfficientNetV2-S Backbone (pretrained on ImageNet, từ timm)
     ├── Convolutional Blocks
     ├── MBConv Blocks
     └── Feature Extraction
+    Output: features (1280)
     ↓
 Global Average Pooling
     ↓
 Classifier Head:
-    ├── Dropout (0.3)
-    ├── Linear (features → 512)
+    ├── Dropout (0.5)
+    ├── Linear (1280 → 512)
     ├── BatchNorm1d + ReLU
-    ├── Dropout (0.15)
-    └── Linear (512 → 960)
+    ├── Dropout (0.25)
+    └── Linear (512 → num_classes)
     ↓
 Output (960 classes - NDC Codes)
 ```
 
-### Chiến lược huấn luyện (Two-Phase Training)
+### Chiến lược huấn luyện
 
-**Phase 1 (Epoch 0-9):**
+**Phase 1 (Epoch 0 - unfreeze_epoch-1):**
 - Freeze backbone
 - Chỉ train classifier head
-- Learning rate: 0.001
+- Learning rate: 0.002
+- Mục đích: Head học cách phân loại với features có sẵn
 
-**Phase 2 (Epoch 10+):**
-- Unfreeze toàn bộ mô hình
-- Backbone LR: 0.0001 (1/10 của head LR)
+**Phase 2 (Epoch unfreeze_epoch+):**
+- Unfreeze toàn bộ mô hình (nếu unfreeze_epoch < num_epochs)
+- Backbone LR: 0.002 × 0.001 = 0.000002
 - Fine-tune toàn bộ mạng
+
+**Early Stopping:**
+- Theo dõi validation accuracy
+- Nếu không cải thiện sau `early_stopping_patience` epochs
+- → Tự động dừng training
 
 ---
 
@@ -296,11 +314,18 @@ Output (960 classes - NDC Codes)
 
 Các kỹ thuật augmentation được áp dụng cho training set:
 
-- Random Horizontal Flip (p=0.5)
-- Random Rotation (±15°)
-- Random Translation (±10%)
-- Color Jitter (brightness ±0.2, contrast ±0.2, saturation ±0.2)
-- Normalize (ImageNet stats)
+- **Random Horizontal Flip** (p=0.5)
+- **Random Vertical Flip** (p=0.3)
+- **Random Rotation** (±30°)
+- **Random Affine**:
+  - Translate: ±15%
+  - Scale: 0.85-1.15
+  - Shear: 5°
+- **Random Resized Crop** (scale 0.7-1.0)
+- **Color Jitter** (brightness ±0.3, contrast ±0.3, saturation ±0.3, hue ±0.1)
+- **Random Grayscale** (p=0.1)
+- **Gaussian Blur** (kernel_size=3, sigma 0.1-2.0)
+- **Normalize** (ImageNet stats)
 
 ---
 
@@ -323,56 +348,22 @@ Mở trình duyệt tại: http://localhost:6006
 
 ### Vẽ biểu đồ Training Metrics
 
-Sau khi training xong, bạn có thể vẽ 2 biểu đồ để xem quá trình training:
-
-**Biểu đồ 1: Train Loss over Epochs** - Xem quá trình train giảm loss qua các epoch
-**Biểu đồ 2: Accuracy Comparison** - So sánh Train vs Validation vs Test accuracy
+Sau khi training xong, bạn có thể vẽ biểu đồ để xem quá trình training:
 
 ```bash
-# Vẽ 2 biểu đồ và lưu vào file (tự động thêm timestamp)
-python plot_metrics.py --log_dir checkpoints/run_20260125_065908/logs/train --save training_curves
+# Vẽ 2 biểu đồ và lưu vào file
+python3 plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --save training_curves
 
 # Chỉ lưu file, không hiển thị trên màn hình
-python plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --save curves --no_show
+python3 plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --save curves --no_show
 
-# Chỉnh sửa fold index (nếu train multi-fold)
-python plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --fold 0 --save curves
+# Chỉnh sửa fold index
+python3 plot_metrics.py --log_dir checkpoints/run_XXX/logs/train --fold 0 --save curves
 ```
 
-#### Các tham số
-
-| Tham số | Mô tả |
-|---------|---------|
-| `--log_dir` | Đường dẫn đến thư mục TensorBoard logs |
-| `--save` | Tên file lưu (sẽ tự thêm timestamp và `_loss.png`/`_accuracy.png`) |
-| `--no_show` | Không hiển thị biểu đồ trên màn hình |
-| `--fold` | Chọn fold để vẽ (mặc định: 0) |
-
-#### Ví dụ output
-
-Khi chạy với `--save training_curves`, sẽ tạo 2 file ảnh với timestamp:
-- `training_curves_20260303_103045_loss.png` - Biểu đồ Train Loss (y = loss, x = epochs)
-- `training_curves_20260303_103045_accuracy.png` - Biểu đồ Accuracy (3 đường: Train/Val/Test)
-
-**Lưu ý:** Timestamp tự động thêm vào tên file để tránh ghi đè khi chạy nhiều lần.
-
-**Biểu đồ 1 - Train Loss:**
-- **Trục X:** Epoch
-- **Trục Y:** Loss
-- **Đường:** Train Loss (xanh dương) - xem quá trình train
-- **Annotation:** Final loss và Best loss với epoch tương ứng
-
-**Biểu đồ 2 - Accuracy Comparison:**
-- **Trục X:** Epoch
-- **Trục Y:** Accuracy (%)
-- **Đường màu xanh lá:** Train Accuracy
-- **Đường màu xanh dương:** Validation Accuracy
-- **Đường màu đỏ (nếu có test):** Test Accuracy
-- **Annotation:** Best validation accuracy với epoch tương ứng
-
-**Lưu ý về Test metrics:**
-- Code hiện tại chỉ log Train và Validation metrics
-- Để có đường Test, bạn cần thêm test phase vào `train.py` hoặc có dataset test riêng
+**Các biểu đồ được tạo:**
+- **Biểu đồ Loss:** Train Loss over Epochs
+- **Biểu đồ Accuracy:** Train vs Validation Accuracy comparison
 
 ---
 
@@ -380,11 +371,9 @@ Khi chạy với `--save training_curves`, sẽ tạo 2 file ảnh với timesta
 
 ### Cấu trúc checkpoint directory
 
-Mỗi lần chạy training sẽ tạo một thư mục mới với timestamp:
-
 ```
 checkpoints/
-└── run_20260125_065908/
+└── run_20260308_083313/
     ├── best_fold0.pth              # Best model (highest val acc)
     ├── checkpoint_fold0_epoch10.pth # Checkpoint mỗi 10 epoch
     ├── checkpoint_fold0_epoch20.pth
@@ -392,21 +381,6 @@ checkpoints/
     └── logs/
         └── train/                  # TensorBoard logs
 ```
-
-### Xóa checkpoints cũ
-
-```bash
-# Xóa tất cả checkpoints
-rm -rf checkpoints/*
-
-# Xóa run cụ thể
-rm -rf checkpoints/run_20260124_163841
-```
-
-**Lưu ý:** File `.gitignore` đã được cấu hình để không commit:
-- `checkpoints/` - Model files (rất nặng)
-- `logs/` - TensorBoard logs
-- `data/` - Dataset
 
 ---
 
@@ -419,8 +393,9 @@ rm -rf checkpoints/run_20260124_163841
 | Top-1 Acc     | ~23.46%  |
 | Top-5 Acc     | ~43%     |
 | Num Classes   | 960      |
-| Train Samples | ~2,982   |
-| Val Samples   | ~746     |
+| Train Samples | ~2,610   |
+| Val Samples   | ~559     |
+| Test Samples  | ~559     |
 
 **Lưu ý:** Đây là bài toán phân loại 960 lớp với mỗi lớp chỉ ~3-4 mẫu, nên accuracy thấp là bình thường.
 
@@ -437,16 +412,17 @@ data:
   num_workers: 0
 ```
 
-**2. CUDA out of memory**
+**2. CUDA/MPS out of memory**
 ```yaml
 # Giải pháp: Giảm batch_size
 data:
-  batch_size: 16  # hoặc 8
+  batch_size: 4  # hoặc 2
 ```
 
 **3. FileNotFoundError: Image not found**
-- Kiểm tra đường dẫn dữ liệu: `ePillID_data/classification_data/fcn_mix_weight/dc_224/`
+- Kiểm tra đường dẫn dữ liệu: `classification_data/fcn_mix_weight/dc_224/`
 - Đảm bảo dataset đã được giải nén đúng vị trí
+- Kiểm tra file `all_labels.csv` có tồn tại trong `data/`
 
 **4. TensorFlow warnings khi training**
 - Đã tự động tắt trong train.py
@@ -466,41 +442,9 @@ data:
 - Batch size lớn hơn → training ổn định hơn nhưng cần nhiều VRAM
 - Label smoothing giúp tránh overconfidence
 - Class weights giúp cân bằng dataset imbalance
+- Early stopping giúp tránh overfitting và tiết kiệm thời gian
+- Gradient clipping giúp training ổn định hơn
 - Sử dụng `--resume` để tiếp tục training khi bị gián đoạn
-
----
-
-## Các tính năng kỹ thuật
-
-### Resume Training Implementation
-
-```python
-# Sử dụng trong train.py
-python train.py --resume checkpoints/run_xxx/best_fold0.pth
-
-# Code tự động:
-# 1. Load model state dict
-# 2. Load optimizer state dict
-# 3. Khôi phục epoch, best_acc1, best_acc5
-# 4. Tiếp tục training từ epoch + 1
-```
-
-### TensorFlow Warning Suppression
-
-```python
-# Đã thêm vào train.py
-import os
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-```
-
-### Git Ignore Setup
-
-File `.gitignore` đã được cấu hình để bỏ qua:
-- Checkpoints (`.pth` files)
-- TensorBoard logs
-- Dữ liệu (`data/`)
-- Python cache (`__pycache__/`)
 
 ---
 
@@ -516,9 +460,3 @@ File `.gitignore` đã được cấu hình để bỏ qua:
 ## License
 
 Dự án này được tạo ra cho mục đích học tập và nghiên cứu. Dataset ePillID thuộc về các tác giả tương ứng.
-
----
-
-## Liên hệ
-
-Nếu có câu hỏi hoặc vấn đề, vui lòng tạo issue trên GitHub repository.
